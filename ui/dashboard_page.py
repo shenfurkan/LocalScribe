@@ -79,8 +79,7 @@ class DashboardPage(QWidget):
         from PySide6.QtWidgets import QFileDialog
         paths, _ = QFileDialog.getOpenFileNames(
             self, "Select Audio / Video Files", "",
-            "Media Files (*.mp3 *.wav *.m4a *.ogg *.flac "
-            "*.mp4 *.mkv *.avi *.mov *.webm *.aac)"
+            "Media Files (*.mp3 *.wav *.m4a *.ogg *.flac *.mp4 *.mkv *.avi *.mov *.webm *.aac);;All Files (*.*)"
         )
         if paths:
             self._on_files_dropped(paths)
@@ -101,9 +100,15 @@ class DashboardPage(QWidget):
             )
             
         # Only process the first file; batch support can be added later
-        self._start_transcription(paths[0])
+        file_path = paths[0]
+        
+        # Pop the settings dialog first
+        from ui.dialogs.language_dialog import LanguageDialog
+        dialog = LanguageDialog(os.path.basename(file_path), self)
+        if dialog.exec():
+            self._start_transcription(file_path, dialog.selected_code)
 
-    def _start_transcription(self, file_path: str):
+    def _start_transcription(self, file_path: str, audio_language: str | None = None):
         if self._active_thread and self._active_thread.isRunning():
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(
@@ -134,7 +139,7 @@ class DashboardPage(QWidget):
         self.streaming_started.emit(self._current_transcript_id, file_name)
 
         # ── 4.  Build and start the worker ──────────────────────────────
-        self._active_worker = TranscriptionWorker(file_path)
+        self._active_worker = TranscriptionWorker(file_path, audio_language)
         self._active_thread = QThread(self)
         self._active_worker.moveToThread(self._active_thread)
         self._active_thread.started.connect(self._active_worker.run)

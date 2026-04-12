@@ -61,3 +61,13 @@ class DropZone(QWidget):
         ]
         if paths:
             self.files_dropped.emit(paths)
+            
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            from PySide6.QtWidgets import QFileDialog
+            paths, _ = QFileDialog.getOpenFileNames(
+                self, "Select Audio / Video Files", "",
+                "Media Files (*.mp3 *.wav *.m4a *.ogg *.flac *.mp4 *.mkv *.avi *.mov *.webm *.aac);;All Files (*.*)"
+            )
+            if paths:
+                self.files_dropped.emit(paths)
