@@ -1,7 +1,8 @@
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QSplitter, QStackedWidget, QApplication
 )
-from PySide6.QtCore import Qt, QThread
+from PySide6.QtCore import Qt, QThread, QPropertyAnimation, QRect, QEasingCurve
+from PySide6.QtGui import QScreen
 import os
 
 from ui.sidebar import Sidebar
@@ -14,8 +15,9 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("LocalScribe")
-        self.resize(1200, 750)
-        self.setMinimumSize(900, 600)
+        self.resize(900, 600)
+        self.setMinimumSize(800, 500)
+        self._center_window()
 
         self.storage = StorageManager()
 
@@ -153,6 +155,36 @@ class MainWindow(QMainWindow):
     # Navigation helpers
     # ───────────────────────────────────────────────────────────────────
 
+    def _center_window(self):
+        screen = QApplication.primaryScreen().geometry()
+        size = self.geometry()
+        if screen.width() > 0:
+            x = screen.x() + (screen.width() - size.width()) // 2
+            y = screen.y() + (screen.height() - size.height()) // 2
+            self.move(max(0, x), max(0, y))
+
+    def _expand_window(self):
+        screen = QApplication.primaryScreen().geometry()
+        if self.width() < 1100 and screen.width() > 1150:
+            current_geom = self.geometry()
+            target_width = 1200
+            target_height = min(750, screen.height() - 80)
+            
+            x = current_geom.x() - (target_width - current_geom.width()) // 2
+            y = current_geom.y() - (target_height - current_geom.height()) // 2
+            
+            x = max(screen.x() + 40, x)
+            y = max(screen.y() + 40, y)
+            
+            target_geom = QRect(x, y, target_width, target_height)
+            
+            self.anim = QPropertyAnimation(self, b"geometry")
+            self.anim.setDuration(450)
+            self.anim.setStartValue(current_geom)
+            self.anim.setEndValue(target_geom)
+            self.anim.setEasingCurve(QEasingCurve.OutCubic)
+            self.anim.start()
+
     def _trigger_upload(self):
         """Sidebar '+ New Transcription' button."""
         self.stack.setCurrentIndex(0)
@@ -165,9 +197,11 @@ class MainWindow(QMainWindow):
             return
         if data.get("status") == "processing":
             # Already showing live view — just switch to it
+            self._expand_window()
             self.stack.setCurrentIndex(1)
             return
         self.transcript_page.load(data)
+        self._expand_window()
         self.stack.setCurrentIndex(1)
 
     # ───────────────────────────────────────────────────────────────────
@@ -181,6 +215,7 @@ class MainWindow(QMainWindow):
         the user sees text appearing word-by-word in real time.
         """
         self.transcript_page.start_streaming(transcript_id, file_name)
+        self._expand_window()
         self.stack.setCurrentIndex(1)
         # Refresh the sidebar so the new card appears right away
         self.sidebar.refresh_file_list()
