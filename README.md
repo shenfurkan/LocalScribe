@@ -74,7 +74,7 @@ LocalScribe/
 ### 2. Initialization 
 Pull down the project code:
 ```bash
-git clone <repository_url>
+git clone https://github.com/shenfurkan/LocalScribe.git
 cd LocalScribe
 ```
 
