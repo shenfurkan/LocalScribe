@@ -1,0 +1,365 @@
+/* ═══════════════════════════════════════════
+   LocalScribe — Dark Theme QSS (#222222 Variant)
+   Palette:
+     Background:   #222222
+     Sidebar:      #1A1A1A
+     Card/Panel:   #2D2D2D
+     Accent:       #059bc8 (blue)
+     Text:         #E2E8F0
+     Subtle text:  #94A3B8
+     Border:       #3A3A3A
+   ═══════════════════════════════════════════ */
+
+QMainWindow, QWidget {
+    background-color: #222222;
+    color: #E2E8F0;
+    font-family: "Segoe UI", Arial, sans-serif;
+    font-size: 10pt;
+}
+
+/* ── Sidebar ─────────────────────────────── */
+#Sidebar {
+    background-color: #1A1A1A;
+    border-right: 1px solid #3A3A3A;
+}
+
+#SidebarScroll {
+    background-color: #1A1A1A;
+}
+
+#SidebarHeader {
+    font-size: 14pt;
+    font-weight: bold;
+    color: #059bc8;
+    padding: 20px 16px 12px 16px;
+    background-color: transparent;
+}
+
+#UploadBtn {
+    margin: 0 12px 12px 12px;
+    padding: 10px;
+    background-color: #059bc8;
+    color: white;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 10pt;
+    border: none;
+}
+#UploadBtn:hover { background-color: #16b0df; }
+#UploadBtn:pressed { background-color: #037294; }
+
+/* ── Transcript Cards ────────────────────── */
+#TranscriptCard {
+    background-color: #2D2D2D;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    padding: 8px;
+}
+#TranscriptCard:hover {
+    border: 1px solid #059bc8;
+    background-color: #333333;
+}
+#CardName {
+    font-weight: bold;
+    color: #E2E8F0;
+    background-color: transparent;
+}
+#CardMeta {
+    color: #6A7F9A;
+    font-size: 8pt;
+    background-color: transparent;
+}
+#CardStatusReady     { color: #34D399; font-size: 8pt; background-color: transparent; }
+#CardStatusProcessing { color: #FBBF24; font-size: 8pt; background-color: transparent; }
+#CardStatusFailed    { color: #F87171; font-size: 8pt; background-color: transparent; }
+
+/* ── Drop Zone ───────────────────────────── */
+#DropZone {
+    background-color: #2D2D2D;
+    border: 2px dashed #444444;
+    border-radius: 16px;
+}
+#DropZone[dragging="true"] {
+    border: 2px dashed #059bc8;
+    background-color: #28283D;
+}
+#DropZoneIcon { font-size: 36pt; background-color: transparent; color: #059bc8; }
+#DropZoneText { font-size: 13pt; font-weight: 600; color: #E2E8F0; background-color: transparent;}
+#DropZoneSubText { font-size: 9pt; color: #94A3B8; background-color: transparent;}
+
+#DashboardHeader {
+    font-size: 22pt;
+    font-weight: bold;
+    color: #E2E8F0;
+    background-color: transparent;
+}
+#DashboardSub {
+    font-size: 10pt;
+    color: #94A3B8;
+    background-color: transparent;
+}
+
+/* ── Action Panel ────────────────────────── */
+#ActionPanel {
+    background-color: #1A1A1A;
+    border-left: 1px solid #3A3A3A;
+}
+#ActionSectionLabel {
+    font-size: 8pt;
+    font-weight: 700;
+    color: #6A6A6A;
+    letter-spacing: 1px;
+    padding: 12px 0 4px 0;
+    background-color: transparent;
+}
+#ActionBtn {
+    background-color: #2D2D2D;
+    color: #CBD5E1;
+    border: 1px solid #444444;
+    border-radius: 6px;
+    padding: 8px 12px;
+    text-align: left;
+    font-size: 9.5pt;
+}
+#ActionBtn:hover { background-color: #383838; border-color: #059bc8; }
+#ActionBtn:pressed { background-color: #444444; }
+#ActionBtnDanger {
+    background-color: #2D2D2D;
+    color: #F87171;
+    border: 1px solid #5A3333;
+    border-radius: 6px;
+    padding: 8px 12px;
+    text-align: left;
+    font-size: 9.5pt;
+}
+#ActionBtnDanger:hover { background-color: #302020; border-color: #EF4444; }
+
+/* ── Transcript Editor ────────────────────── */
+#TranscriptTitle {
+    font-size: 16pt;
+    font-weight: 700;
+    color: #E2E8F0;
+    padding-bottom: 4px;
+    background-color: transparent;
+}
+#TranscriptMeta {
+    font-size: 9pt;
+    color: #94A3B8;
+    padding-bottom: 12px;
+    background-color: transparent;
+}
+#TranscriptEditor {
+    background-color: #1A1A1A;
+    color: #E2E8F0;
+    border: 1px solid #3A3A3A;
+    border-radius: 8px;
+    font-size: 11pt;
+    padding: 16px;
+    selection-background-color: #059bc8;
+}
+
+/* ── Buttons ─────────────────────────────── */
+#PrimaryBtn {
+    background-color: #059bc8;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 20px;
+    font-weight: 600;
+}
+#PrimaryBtn:hover { background-color: #16b0df; }
+#PrimaryBtn:pressed { background-color: #037294; }
+#PrimaryBtn:disabled { background-color: #4B4B4B; color: #888888; }
+
+QPushButton {
+    background-color: #2D2D2D;
+    color: #CBD5E1;
+    border: 1px solid #444444;
+    border-radius: 6px;
+    padding: 6px 14px;
+}
+QPushButton:hover { background-color: #383838; }
+
+/* ── Progress Bar ────────────────────────── */
+QProgressBar {
+    background-color: #2D2D2D;
+    border: 1px solid #444444;
+    border-radius: 4px;
+    height: 12px;
+    text-align: center;
+    color: transparent;
+}
+QProgressBar::chunk {
+    background-color: #059bc8;
+    border-radius: 3px;
+}
+
+/* ── Dialogs ─────────────────────────────── */
+QDialog {
+    background-color: #222222;
+}
+
+QLineEdit {
+    background-color: #2D2D2D;
+    border: 1px solid #444444;
+    border-radius: 6px;
+    padding: 8px;
+    color: #E2E8F0;
+    selection-background-color: #059bc8;
+}
+QLineEdit:focus {
+    border: 1px solid #059bc8;
+}
+
+/* ── ScrollBars ──────────────────────────── */
+QScrollBar:vertical {
+    background: #222222;
+    width: 10px;
+    margin: 0px;
+    border-radius: 5px;
+}
+QScrollBar::handle:vertical {
+    background: #444444;
+    border-radius: 5px;
+    min-height: 20px;
+    margin: 2px;
+}
+QScrollBar::handle:vertical:hover { background: #059bc8; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
+
+/* ── ComboBox ────────────────────────────── */
+QComboBox {
+    background-color: #2D2D2D;
+    border: 1px solid #444444;
+    border-radius: 6px;
+    padding: 6px 10px;
+    color: #E2E8F0;
+}
+QComboBox::drop-down { border: none; }
+QComboBox QAbstractItemView {
+    background-color: #2D2D2D;
+    border: 1px solid #444444;
+    selection-background-color: #059bc8;
+    color: #E2E8F0;
+}
+
+/* ── Splitter handle ─────────────────────── */
+QSplitter::handle { 
+    background-color: #3A3A3A; 
+}
+
+/* ── CheckBox and Radio ─────────────────────── */
+QCheckBox, QRadioButton {
+    spacing: 8px;
+    color: #E2E8F0;
+}
+QCheckBox::indicator, QRadioButton::indicator {
+    width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    border: 1px solid #555555;
+    background-color: #2D2D2D;
+}
+QCheckBox::indicator { border-radius: 4px; }
+QCheckBox::indicator:checked, QRadioButton::indicator:checked {
+    background-color: #059bc8;
+    border: 1px solid #059bc8;
+}
+
+QMenu {
+    background-color: #2D2D2D;
+    border: 1px solid #444444;
+    padding: 4px;
+    border-radius: 6px;
+}
+QMenu::item {
+    background-color: transparent;
+    color: #E2E8F0;
+    padding: 6px 20px 6px 10px;
+    border-radius: 4px;
+}
+QMenu::item:selected {
+    background-color: #059bc8;
+    color: white;
+}
+
+/* ── SRT Dialog ──────────────────────────── */
+#SRTDialog {
+    background-color: #2A2A2A;
+}
+
+#SpinField, QSpinBox, QDoubleSpinBox {
+    background-color: #1E1E1E;
+    border: 1px solid #444444;
+    border-radius: 8px;
+    padding: 6px 10px;
+    color: #E2E8F0;
+    font-size: 11pt;
+    selection-background-color: #059bc8;
+}
+QSpinBox:focus, QDoubleSpinBox:focus {
+    border: 1.5px solid #059bc8;
+}
+QSpinBox::up-button, QDoubleSpinBox::up-button,
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    background-color: #333333;
+    border: none;
+    width: 18px;
+}
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
+    background-color: #444444;
+}
+
+#FieldLabel {
+    font-size: 10pt;
+    font-weight: 600;
+    color: #E2E8F0;
+    background-color: transparent;
+}
+
+#InfoIcon {
+    color: #94A3B8;
+    font-size: 11pt;
+    background-color: transparent;
+}
+
+#SectionSeparator {
+    color: #3A3A3A;
+    background-color: #3A3A3A;
+}
+
+#CollapseBtn {
+    background-color: transparent;
+    border: none;
+    color: #94A3B8;
+    font-size: 9.5pt;
+    text-align: left;
+    padding: 4px 0;
+}
+#CollapseBtn:hover { color: #059bc8; }
+
+#SentenceCheck {
+    font-size: 10pt;
+    font-weight: 600;
+    color: #E2E8F0;
+}
+
+#SentenceDesc {
+    font-size: 9pt;
+    color: #94A3B8;
+    background-color: transparent;
+}
+
+#SRTDownloadBtn {
+    background-color: #3B82F6;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 11pt;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+#SRTDownloadBtn:hover  { background-color: #60A5FA; }
+#SRTDownloadBtn:pressed { background-color: #2563EB; }

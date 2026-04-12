@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+.venv/
+env/
+.env/
+
+# Build and Dist
+build/
+dist/
+*.spec
+
+# Storage Directories
+models/
+transcripts/
+
+# IDE / Editor
+.idea/
+.vscode/
+
+# Logs and Errors
+err.txt
+*.log

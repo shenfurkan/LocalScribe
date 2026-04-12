@@ -1,0 +1,369 @@
+/* ═══════════════════════════════════════════
+   LocalScribe — Pastel Light Theme QSS
+   Palette:
+     Background:   #F1F0E8
+     Sidebar:      #EEE0C9
+     Card/Panel:   #FFFFFF
+     Accent:       #96B6C5 (Blue-Gray)
+     Hover:        #ADC4CE
+     Text:         #2D3748
+     Subtle text:  #718096
+     Border:       #D1D5DB
+   ═══════════════════════════════════════════ */
+
+QMainWindow, QWidget {
+    background-color: #F1F0E8;
+    color: #2D3748;
+    font-family: "Segoe UI", Arial, sans-serif;
+    font-size: 10pt;
+}
+
+/* ── Sidebar ─────────────────────────────── */
+#Sidebar {
+    background-color: #EEE0C9;
+    border-right: 1px solid #D1D5DB;
+}
+
+#SidebarScroll {
+    background-color: #EEE0C9;
+}
+
+#SidebarHeader {
+    font-size: 14pt;
+    font-weight: bold;
+    color: #2D3748;
+    padding: 20px 16px 12px 16px;
+    background-color: transparent;
+}
+
+#UploadBtn {
+    margin: 0 12px 12px 12px;
+    padding: 10px;
+    background-color: #96B6C5;
+    color: white;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 10pt;
+    border: none;
+}
+#UploadBtn:hover { background-color: #ADC4CE; }
+#UploadBtn:pressed { background-color: #7A96A6; }
+
+/* ── Transcript Cards ────────────────────── */
+#TranscriptCard {
+    background-color: #FFFFFF;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    padding: 8px;
+}
+#TranscriptCard:hover {
+    border: 1px solid #96B6C5;
+    background-color: #F8FAFC;
+}
+#CardName {
+    font-weight: bold;
+    color: #1A202C;
+    background-color: transparent;
+}
+#CardMeta {
+    color: #718096;
+    font-size: 8pt;
+    background-color: transparent;
+}
+#CardStatusReady     { color: #10B981; font-size: 8pt; background-color: transparent; }
+#CardStatusProcessing { color: #D97706; font-size: 8pt; background-color: transparent; }
+#CardStatusFailed    { color: #E53E3E; font-size: 8pt; background-color: transparent; }
+
+/* ── Drop Zone ───────────────────────────── */
+#DropZone {
+    background-color: #FFFFFF;
+    border: 2px dashed #D1D5DB;
+    border-radius: 16px;
+}
+#DropZone[dragging="true"] {
+    border: 2px dashed #96B6C5;
+    background-color: #F1F5F9;
+}
+#DropZoneIcon { font-size: 36pt; background-color: transparent; color: #96B6C5; }
+#DropZoneText { font-size: 13pt; font-weight: 600; color: #2D3748; background-color: transparent;}
+#DropZoneSubText { font-size: 9pt; color: #718096; background-color: transparent;}
+
+#DashboardHeader {
+    font-size: 22pt;
+    font-weight: bold;
+    color: #2D3748;
+    background-color: transparent;
+}
+#DashboardSub {
+    font-size: 10pt;
+    color: #718096;
+    background-color: transparent;
+}
+
+/* ── Action Panel ────────────────────────── */
+#ActionPanel {
+    background-color: #EEE0C9;
+    border-left: 1px solid #D1D5DB;
+}
+#ActionSectionLabel {
+    font-size: 8pt;
+    font-weight: 700;
+    color: #4A5568;
+    letter-spacing: 1px;
+    padding: 12px 0 4px 0;
+    background-color: transparent;
+}
+#ActionBtn {
+    background-color: #FFFFFF;
+    color: #4A5568;
+    border: 1px solid #CBD5E1;
+    border-radius: 6px;
+    padding: 8px 12px;
+    text-align: left;
+    font-size: 9.5pt;
+}
+#ActionBtn:hover { background-color: #F8FAFC; border-color: #96B6C5; }
+#ActionBtn:pressed { background-color: #E2E8F0; }
+#ActionBtnDanger {
+    background-color: #FFFFFF;
+    color: #E53E3E;
+    border: 1px solid #FC8181;
+    border-radius: 6px;
+    padding: 8px 12px;
+    text-align: left;
+    font-size: 9.5pt;
+}
+#ActionBtnDanger:hover { background-color: #FFF5F5; border-color: #E53E3E; }
+
+/* ── Transcript Editor ────────────────────── */
+#TranscriptTitle {
+    font-size: 16pt;
+    font-weight: 700;
+    color: #1A202C;
+    padding-bottom: 4px;
+    background-color: transparent;
+}
+#TranscriptMeta {
+    font-size: 9pt;
+    color: #718096;
+    padding-bottom: 12px;
+    background-color: transparent;
+}
+#TranscriptEditor {
+    background-color: #FFFFFF;
+    color: #2D3748;
+    border: 1px solid #D1D5DB;
+    border-radius: 8px;
+    font-size: 11pt;
+    padding: 16px;
+    selection-background-color: #ADC4CE;
+    selection-color: #1A202C;
+}
+
+/* ── Buttons ─────────────────────────────── */
+#PrimaryBtn {
+    background-color: #96B6C5;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 20px;
+    font-weight: 600;
+}
+#PrimaryBtn:hover { background-color: #ADC4CE; }
+#PrimaryBtn:pressed { background-color: #7A96A6; }
+#PrimaryBtn:disabled { background-color: #CBD5E1; color: #94A3B8; }
+
+QPushButton {
+    background-color: #FFFFFF;
+    color: #4A5568;
+    border: 1px solid #D1D5DB;
+    border-radius: 6px;
+    padding: 6px 14px;
+}
+QPushButton:hover { background-color: #F8FAFC; }
+
+/* ── Progress Bar ────────────────────────── */
+QProgressBar {
+    background-color: #FFFFFF;
+    border: 1px solid #D1D5DB;
+    border-radius: 4px;
+    height: 12px;
+    text-align: center;
+    color: transparent;
+}
+QProgressBar::chunk {
+    background-color: #96B6C5;
+    border-radius: 3px;
+}
+
+/* ── Dialogs ─────────────────────────────── */
+QDialog {
+    background-color: #F1F0E8;
+}
+
+QLineEdit {
+    background-color: #FFFFFF;
+    border: 1px solid #D1D5DB;
+    border-radius: 6px;
+    padding: 8px;
+    color: #2D3748;
+    selection-background-color: #ADC4CE;
+    selection-color: #1A202C;
+}
+QLineEdit:focus {
+    border: 1px solid #96B6C5;
+}
+
+/* ── ScrollBars ──────────────────────────── */
+QScrollBar:vertical {
+    background: #F1F0E8;
+    width: 10px;
+    margin: 0px;
+    border-radius: 5px;
+}
+QScrollBar::handle:vertical {
+    background: #CBD5E1;
+    border-radius: 5px;
+    min-height: 20px;
+    margin: 2px;
+}
+QScrollBar::handle:vertical:hover { background: #96B6C5; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
+
+/* ── ComboBox ────────────────────────────── */
+QComboBox {
+    background-color: #FFFFFF;
+    border: 1px solid #D1D5DB;
+    border-radius: 6px;
+    padding: 6px 10px;
+    color: #2D3748;
+}
+QComboBox::drop-down { border: none; }
+QComboBox QAbstractItemView {
+    background-color: #FFFFFF;
+    border: 1px solid #D1D5DB;
+    selection-background-color: #ADC4CE;
+    selection-color: #1A202C;
+    color: #2D3748;
+}
+
+/* ── Splitter handle ─────────────────────── */
+QSplitter::handle { 
+    background-color: #D1D5DB; 
+}
+
+/* ── CheckBox and Radio ─────────────────────── */
+QCheckBox, QRadioButton {
+    spacing: 8px;
+    color: #2D3748;
+}
+QCheckBox::indicator, QRadioButton::indicator {
+    width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    border: 1px solid #A0AEC0;
+    background-color: #FFFFFF;
+}
+QCheckBox::indicator { border-radius: 4px; }
+QCheckBox::indicator:checked, QRadioButton::indicator:checked {
+    background-color: #96B6C5;
+    border: 1px solid #96B6C5;
+}
+
+QMenu {
+    background-color: #FFFFFF;
+    border: 1px solid #D1D5DB;
+    padding: 4px;
+    border-radius: 6px;
+}
+QMenu::item {
+    background-color: transparent;
+    color: #2D3748;
+    padding: 6px 20px 6px 10px;
+    border-radius: 4px;
+}
+QMenu::item:selected {
+    background-color: #96B6C5;
+    color: white;
+}
+
+/* ── SRT Dialog ──────────────────────────── */
+#SRTDialog {
+    background-color: #FFFFFF;
+}
+
+#SpinField, QSpinBox, QDoubleSpinBox {
+    background-color: #FFFFFF;
+    border: 1px solid #D1D5DB;
+    border-radius: 8px;
+    padding: 6px 10px;
+    color: #2D3748;
+    font-size: 11pt;
+    selection-background-color: #ADC4CE;
+}
+QSpinBox:focus, QDoubleSpinBox:focus {
+    border: 1.5px solid #96B6C5;
+}
+QSpinBox::up-button, QDoubleSpinBox::up-button,
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    background-color: #F1F5F9;
+    border: none;
+    width: 18px;
+}
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
+    background-color: #E2E8F0;
+}
+
+#FieldLabel {
+    font-size: 10pt;
+    font-weight: 600;
+    color: #1A202C;
+    background-color: transparent;
+}
+
+#InfoIcon {
+    color: #718096;
+    font-size: 11pt;
+    background-color: transparent;
+}
+
+#SectionSeparator {
+    color: #D1D5DB;
+    background-color: #D1D5DB;
+}
+
+#CollapseBtn {
+    background-color: transparent;
+    border: none;
+    color: #718096;
+    font-size: 9.5pt;
+    text-align: left;
+    padding: 4px 0;
+}
+#CollapseBtn:hover { color: #96B6C5; }
+
+#SentenceCheck {
+    font-size: 10pt;
+    font-weight: 600;
+    color: #1A202C;
+}
+
+#SentenceDesc {
+    font-size: 9pt;
+    color: #718096;
+    background-color: transparent;
+}
+
+#SRTDownloadBtn {
+    background-color: #3B82F6;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 11pt;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+#SRTDownloadBtn:hover  { background-color: #60A5FA; }
+#SRTDownloadBtn:pressed { background-color: #2563EB; }
