@@ -31,7 +31,7 @@ QMainWindow, QWidget {
     font-size: 14pt;
     font-weight: bold;
     color: #059bc8;
-    padding: 20px 16px 12px 16px;
+    padding: 6px 16px 0px 16px;
     background-color: transparent;
 }
 

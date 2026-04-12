@@ -34,9 +34,13 @@ class TranscriptionWorker(QObject):
     # (so the UI can switch from indeterminate → percentage progress bar)
     transcription_started = Signal(float)   # payload = total_duration
 
-    def __init__(self, file_path: str):
+    def __init__(self, file_path: str, audio_language: str | None = None,
+                 initial_prompt: str = "", beam_size: int = 5):
         super().__init__()
         self.file_path = file_path
+        self.audio_language = audio_language
+        self.initial_prompt = initial_prompt
+        self.beam_size = beam_size
         self._cancelled = False
 
     def cancel(self):
@@ -56,18 +60,19 @@ class TranscriptionWorker(QObject):
                 return
 
             # ── 2. Start transcription (returns a lazy generator) ──────
-            segments_gen, info = model.transcribe(
-                self.file_path,
-                word_timestamps=True,       # word-level start/end times
-                vad_filter=True,            # skip silent passages (VAD)
-                vad_parameters=dict(
-                    min_silence_duration_ms=500,
-                    speech_pad_ms=200,
-                ),
-                beam_size=5,                # higher → more accurate but slower
-                no_repeat_ngram_size=3,     # suppress hallucinated repetitions
-                temperature=0.0,            # deterministic decoding
-            )
+            transcribe_kwargs = {
+                "language": self.audio_language,
+                "word_timestamps": True,
+                "vad_filter": True,
+                "vad_parameters": dict(min_silence_duration_ms=2000, speech_pad_ms=400),
+                "beam_size": self.beam_size,
+                "no_repeat_ngram_size": 3,
+                "condition_on_previous_text": False,
+            }
+            if self.initial_prompt:
+                transcribe_kwargs["initial_prompt"] = self.initial_prompt
+
+            segments_gen, info = model.transcribe(self.file_path, **transcribe_kwargs)
 
             total_duration: float = info.duration   # seconds
             self.transcription_started.emit(total_duration)

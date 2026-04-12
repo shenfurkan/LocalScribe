@@ -294,45 +294,4 @@ def export_pdf(
 
 # ── Self-contained HTML share page ────────────────────────────────────────────
 
-def export_html(name: str, segments: list) -> str:
-    """
-    Generates a self-contained HTML page.
-    All dynamic content is HTML-escaped to prevent injection.
-    """
-    safe_name = html_lib.escape(name)
 
-    seg_html = []
-    for i, seg in enumerate(segments):
-        ts           = _readable_time(seg["start"])
-        escaped_text = html_lib.escape(seg["text"])
-        seg_html.append(f"""
-        <div class="segment" id="seg-{i}">
-            <span class="timestamp">{ts}</span>
-            <span class="text">{escaped_text}</span>
-        </div>""")
-
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>{safe_name} — LocalScribe Transcript</title>
-<style>
-  body {{ font-family: 'Segoe UI', sans-serif; background:#F1F0E8;
-         color:#2D3748; max-width:800px; margin:0 auto; padding:40px 20px; }}
-  h1 {{ color:#96B6C5; margin-bottom: 5px; }}
-  .segment {{ padding:8px 0; border-bottom:1px solid #D1D5DB;
-              display:flex; gap:12px; }}
-  .timestamp {{ color:#96B6C5; font-size:0.8em; min-width:80px;
-                padding-top:3px; white-space:nowrap; }}
-  .segment:hover {{ background:#FFFFFF; border-radius:6px; }}
-  .meta {{ color:#718096; font-size: 0.9em; margin-bottom: 30px; }}
-</style>
-</head>
-<body>
-<h1>🎙 {safe_name}</h1>
-<p class="meta">Transcript generated with LocalScribe</p>
-<div class="transcript">
-{''.join(seg_html)}
-</div>
-</body>
-</html>"""

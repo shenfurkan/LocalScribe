@@ -2,6 +2,9 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QPushButton, QScrollArea, QFrame
 )
+from PySide6.QtGui import QPixmap, QImage
+from PySide6.QtCore import Qt
+import os
 from ui.widgets.transcript_card import TranscriptCard
 from core.storage import StorageManager
 
@@ -21,9 +24,11 @@ class Sidebar(QWidget):
         layout.setSpacing(0)
         
         # Branding header
-        header = QLabel("🎙 LocalScribe")
-        header.setObjectName("SidebarHeader")
-        layout.addWidget(header)
+        self.header = QLabel()
+        self.header.setObjectName("SidebarHeader")
+        self.header.setAlignment(Qt.AlignCenter)
+        self.header.setContentsMargins(0, 4, 0, 0)
+        layout.addWidget(self.header)
         
         # Upload button
         upload_btn = QPushButton("＋  New Transcription")
@@ -67,6 +72,30 @@ class Sidebar(QWidget):
 
     def set_status(self, msg: str):
         self.status_label.setText(msg)
+
+    def update_theme(self, theme: str, base_dir: str):
+        filename = "localscribeheaderdark.png" if theme == "dark" else "localscribeheaderlight.png"
+        path = os.path.join(base_dir, "image", filename)
+        img = QImage(path)
+        if not img.isNull():
+            # Handle High-DPI scaling: Scale to a higher physical resolution
+            # but set the logical devicePixelRatio so it remains sharp.
+            dpr = self.devicePixelRatioF()
+            # If dpr is 1.0, artificially doubling it and letting the label scale it down 
+            # often yields much sharper results on Windows for text-heavy logos.
+            render_ratio = max(dpr, 2.0) 
+            
+            logical_width = 110
+            physical_width = int(logical_width * render_ratio)
+            
+            # QImage SmoothTransformation uses a much higher quality filter than QPixmap
+            scaled_img = img.scaledToWidth(physical_width, Qt.SmoothTransformation)
+            scaled_pix = QPixmap.fromImage(scaled_img)
+            
+            # Tell Qt this pixmap has a higher pixel density
+            scaled_pix.setDevicePixelRatio(render_ratio)
+            
+            self.header.setPixmap(scaled_pix)
     
     def refresh_file_list(self):
         # Clear existing cards

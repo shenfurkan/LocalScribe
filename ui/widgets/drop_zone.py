@@ -19,7 +19,7 @@ class DropZone(QWidget):
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignCenter)
         
-        self.icon_label = QLabel("🎵")
+        self.icon_label = QLabel()
         self.icon_label.setObjectName("DropZoneIcon")
         self.icon_label.setAlignment(Qt.AlignCenter)
         

@@ -1,8 +1,8 @@
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QTextEdit, QFileDialog,
-    QPushButton, QLabel, QProgressBar, QComboBox
+    QWidget, QHBoxLayout, QVBoxLayout, QTextBrowser, QFileDialog,
+    QPushButton, QLabel, QProgressBar, QComboBox, QSlider
 )
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Signal, Qt, QUrl
 from PySide6.QtGui import QTextCursor
 
 from ui.widgets.timestamp_highlighter import TimestampHighlighter
@@ -11,6 +11,9 @@ from ui.dialogs.translate_dialog import TranslateDialog
 from ui.dialogs.rename_dialog import RenameDialog
 from core.exporter import export_txt, _readable_time
 from core.storage import StorageManager
+from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
+import os
+import html
 
 
 class TranscriptPage(QWidget):
@@ -48,12 +51,43 @@ class TranscriptPage(QWidget):
         self.live_progress.setFixedHeight(6)
         self.live_progress.hide()
 
-        self.editor = QTextEdit()
+        self.editor = QTextBrowser()
         self.editor.setObjectName("TranscriptEditor")
         self.editor.setReadOnly(True)
+        self.editor.setOpenLinks(False)
+        self.editor.anchorClicked.connect(self._seek_to_anchor)
 
-        # Attach syntax highlighter — colours [HH:MM:SS] tokens violet
+        # Attach syntax highlighter — colours [HH:MM:SS] tokens violet inside plain text
         self.highlighter = TimestampHighlighter(self.editor.document())
+
+        # ── Audio Player Setup ─────────────────────────────────────────
+        self.audio_output = QAudioOutput()
+        self.player = QMediaPlayer()
+        self.player.setAudioOutput(self.audio_output)
+        
+        self.audio_widget = QWidget()
+        audio_layout = QHBoxLayout(self.audio_widget)
+        audio_layout.setContentsMargins(0, 0, 0, 8)
+        
+        self.play_btn = QPushButton("▶ Play")
+        self.play_btn.setObjectName("ActionBtn")
+        self.play_btn.setFixedWidth(80)
+        self.play_btn.clicked.connect(self._toggle_playback)
+        
+        self.audio_slider = QSlider(Qt.Horizontal)
+        self.audio_slider.sliderMoved.connect(self.player.setPosition)
+        
+        self.time_label = QLabel("00:00 / 00:00")
+        self.time_label.setObjectName("CardMeta")
+        
+        self.player.positionChanged.connect(self._on_player_position_changed)
+        self.player.durationChanged.connect(self.audio_slider.setMaximum)
+        self.player.playingChanged.connect(self._on_playing_changed)
+
+        audio_layout.addWidget(self.play_btn)
+        audio_layout.addWidget(self.audio_slider)
+        audio_layout.addWidget(self.time_label)
+        self.audio_widget.hide()
 
         header_layout = QHBoxLayout()
         header_text_layout = QVBoxLayout()
@@ -71,6 +105,7 @@ class TranscriptPage(QWidget):
         header_layout.addWidget(self.version_combo)
 
         editor_layout.addLayout(header_layout)
+        editor_layout.addWidget(self.audio_widget)
         editor_layout.addWidget(self.live_progress)
         editor_layout.addWidget(self.editor, stretch=1)
 
@@ -138,12 +173,7 @@ class TranscriptPage(QWidget):
         translate_btn.setObjectName("ActionBtn")
         translate_btn.clicked.connect(self._open_translate_dialog)
 
-        share_btn = QPushButton("\U0001f517  Share (HTML)")
-        share_btn.setObjectName("ActionBtn")
-        share_btn.clicked.connect(self._share_as_html)
-
         layout.addWidget(translate_btn)
-        layout.addWidget(share_btn)
 
         # ── FILE ──────────────────────────────────────────────────────
         layout.addWidget(section("FILE"))
@@ -256,6 +286,14 @@ class TranscriptPage(QWidget):
         self.editor.setReadOnly(True)
         self.edit_btn.setText("\u270f\ufe0f  Edit Transcript")
         self.live_progress.hide()
+        
+        file_path = transcript.get("file_path")
+        if file_path and os.path.exists(file_path):
+            self.player.setSource(QUrl.fromLocalFile(file_path))
+            self.audio_widget.show()
+        else:
+            self.player.setSource(QUrl())
+            self.audio_widget.hide()
 
         lang = str(transcript.get("language", "?")).upper()
         dur  = transcript.get("duration_seconds", 0)
@@ -319,8 +357,25 @@ class TranscriptPage(QWidget):
         if not self._transcript:
             return
         segs = getattr(self, "_current_segments", self._transcript.get("segments", []))
-        text = export_txt(segs, include_timestamps=self._show_timestamps)
-        self.editor.setPlainText(text)
+        
+        if self._editing:
+            # Flat text for QPlainText editing mode
+            text = export_txt(segs, include_timestamps=self._show_timestamps)
+            self.editor.setPlainText(text)
+        else:
+            # Interactive HTML view for clicking timestamps
+            html_parts = []
+            html_parts.append("<style>a { text-decoration: none; color: #059bc8; }</style>")
+            for seg in segs:
+                safetext = html.escape(seg.get('text', ''))
+                if self._show_timestamps and "start" in seg:
+                    ts_str = _readable_time(seg['start'])
+                    link = f'<a href="ts:{seg["start"]}">{ts_str}</a>'
+                    html_parts.append(f"{link}  {safetext}")
+                else:
+                    html_parts.append(safetext)
+            
+            self.editor.setHtml("<br><br>".join(html_parts))
 
     def _toggle_timestamps(self):
         self._show_timestamps = not self._show_timestamps
@@ -341,6 +396,7 @@ class TranscriptPage(QWidget):
         if self._editing:
             self.edit_btn.setText("\U0001f4be  Save Changes")
             self.version_combo.setEnabled(False)
+            self._refresh_text()
         else:
             # Persist the edited text as a single segment
             edited = self.editor.toPlainText()
@@ -364,6 +420,38 @@ class TranscriptPage(QWidget):
             self._current_segments = new_segments
             self.edit_btn.setText("\u270f\ufe0f  Edit Transcript")
             self.version_combo.setEnabled(True)
+            self._refresh_text()
+
+    # ─────────────────────────────────────────────────────────────────
+    # Audio Playback
+    # ─────────────────────────────────────────────────────────────────
+
+    def _seek_to_anchor(self, url: QUrl):
+        if url.scheme() == "ts" and self.player.source().isValid():
+            try:
+                seconds = float(url.path())
+                self.player.setPosition(int(seconds * 1000))
+                self.player.play()
+            except ValueError:
+                pass
+
+    def _toggle_playback(self):
+        if self.player.isPlaying():
+            self.player.pause()
+        else:
+            self.player.play()
+            
+    def _on_playing_changed(self, is_playing: bool):
+        self.play_btn.setText("⏸ Pause" if is_playing else "▶ Play")
+
+    def _on_player_position_changed(self, position: int):
+        if not self.audio_slider.isSliderDown():
+            self.audio_slider.setValue(position)
+            
+        dur = self.player.duration()
+        cur_sec = position // 1000
+        dur_sec = dur // 1000
+        self.time_label.setText(f"{cur_sec // 60:02d}:{cur_sec % 60:02d} / {dur_sec // 60:02d}:{dur_sec % 60:02d}")
 
     def _quick_download(self):
         if not self._transcript or self._streaming:
@@ -390,23 +478,7 @@ class TranscriptPage(QWidget):
         dlg.translation_saved.connect(self.load)
         dlg.exec()
 
-    def _share_as_html(self):
-        if not self._transcript or self._streaming:
-            return
-        from core.exporter import export_html
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Shareable HTML",
-            f"{self._transcript.get('name', 'transcript')}.html",
-            "HTML Files (*.html)",
-        )
-        if path:
-            proxy = self._get_proxy_transcript()
-            html = export_html(
-                proxy.get("name", "Transcript"),
-                proxy.get("segments", []),
-            )
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write(html)
+
 
     def _show_stats(self):
         if not self._transcript:

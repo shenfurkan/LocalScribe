@@ -100,6 +100,10 @@ class MainWindow(QMainWindow):
         else:
             print(f"[WARNING] stylesheet not found for theme change: {qss_path}")
 
+        # Update dynamic image assets
+        self.sidebar.update_theme(theme, base_dir)
+        self.dashboard_page.update_theme(theme, base_dir)
+
     def _toggle_theme(self):
         current = self.storage.get_setting("theme", "dark")
         new_theme = "light" if current == "dark" else "dark"

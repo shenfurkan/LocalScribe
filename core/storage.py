@@ -77,8 +77,10 @@ class StorageManager:
     def _save_index(self) -> None:
         try:
             payload = {**self._index_cache, "_settings": self.settings}
-            with open(self.INDEX_FILE, "w", encoding="utf-8") as fh:
+            tmp_path = self.INDEX_FILE.with_suffix(".tmp")
+            with open(tmp_path, "w", encoding="utf-8") as fh:
                 json.dump(payload, fh, ensure_ascii=False)
+            tmp_path.replace(self.INDEX_FILE)
         except Exception as exc:
             logging.error("Error saving index: %s", exc)
 
@@ -124,8 +126,10 @@ class StorageManager:
             transcript["created_at"] = datetime.now().isoformat()
 
         fp = self._path_for(transcript["id"])
-        with open(fp, "w", encoding="utf-8") as fh:
+        tmp_path = fp.with_suffix(".tmp")
+        with open(tmp_path, "w", encoding="utf-8") as fh:
             json.dump(transcript, fh, indent=2, ensure_ascii=False)
+        tmp_path.replace(fp)
 
         self._index_cache[transcript["id"]] = self._extract_meta(transcript)
         self._save_index()

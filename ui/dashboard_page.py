@@ -74,6 +74,15 @@ class DashboardPage(QWidget):
     # Public API
     # ───────────────────────────────────────────────────────────────────
 
+    def update_theme(self, theme: str, base_dir: str):
+        filename = "dragdropdarktheme.png" if theme == "dark" else "dragdroplighttheme.png"
+        path = os.path.join(base_dir, "image", filename)
+        from PySide6.QtGui import QPixmap
+        from PySide6.QtCore import Qt
+        pix = QPixmap(path)
+        if not pix.isNull():
+            self.drop_zone.icon_label.setPixmap(pix.scaledToHeight(80, Qt.SmoothTransformation))
+
     def trigger_upload(self):
         """Called when the sidebar '+ New Transcription' button is pressed."""
         from PySide6.QtWidgets import QFileDialog
@@ -106,9 +115,15 @@ class DashboardPage(QWidget):
         from ui.dialogs.language_dialog import LanguageDialog
         dialog = LanguageDialog(os.path.basename(file_path), self)
         if dialog.exec():
-            self._start_transcription(file_path, dialog.selected_code)
+            # Pass all gathered settings into a config structured dictionary
+            settings = {
+                "language": dialog.selected_code,
+                "prompt": dialog.initial_prompt,
+                "beam_size": dialog.beam_size
+            }
+            self._start_transcription(file_path, settings)
 
-    def _start_transcription(self, file_path: str, audio_language: str | None = None):
+    def _start_transcription(self, file_path: str, settings: dict):
         if self._active_thread and self._active_thread.isRunning():
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(
@@ -125,6 +140,7 @@ class DashboardPage(QWidget):
             "name":   file_name,
             "status": "processing",
             "segments": [],
+            "file_path": file_path,
         })
 
         # ── 2.  Show progress UI ────────────────────────────────────────
@@ -139,7 +155,12 @@ class DashboardPage(QWidget):
         self.streaming_started.emit(self._current_transcript_id, file_name)
 
         # ── 4.  Build and start the worker ──────────────────────────────
-        self._active_worker = TranscriptionWorker(file_path, audio_language)
+        self._active_worker = TranscriptionWorker(
+            file_path, 
+            audio_language=settings.get("language"),
+            initial_prompt=settings.get("prompt", ""),
+            beam_size=settings.get("beam_size", 5)
+        )
         self._active_thread = QThread(self)
         self._active_worker.moveToThread(self._active_thread)
         self._active_thread.started.connect(self._active_worker.run)
