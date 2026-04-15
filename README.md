@@ -1,5 +1,7 @@
 # LocalScribe
 
+> **Beta Notice**: LocalScribe is currently in an **early beta** stage. Features, UI behavior, and setup/packaging flows may change, and you may still encounter bugs while the project is being stabilized.
+
 **LocalScribe** is an elegant, entirely offline, and privacy-focused application for highly accurate audio transcription, translation, and document generation. Built on **PySide6** and powered by the cutting-edge **faster-whisper** engine, it brings studio-quality subtitle and transcript generation completely to your local hardware without relying on any cloud APIs or third-party telemetries.
 
 No internet connection required. No subscriptions. No tracking. Complete privacy—all audio strictly stays on your local machine.
