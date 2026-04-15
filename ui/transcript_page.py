@@ -479,7 +479,6 @@ class TranscriptPage(QWidget):
         dlg.exec()
 
 
-
     def _show_stats(self):
         if not self._transcript:
             return

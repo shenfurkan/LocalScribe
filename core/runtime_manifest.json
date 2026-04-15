@@ -1,0 +1,8 @@
+{
+    "whisper_model": {
+        "repo_id": "Systran/faster-whisper-large-v3",
+        "local_dir_name": "large-v3-local",
+        "expected_file": "model.bin",
+        "description": "Whisper large-v3 speech recognition model (~3 GB)"
+    }
+}

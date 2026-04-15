@@ -39,6 +39,7 @@ class LanguageDialog(QDialog):
         self.selected_code = None
         self.initial_prompt = ""
         self.beam_size = 5
+        self.transcription_profile = "balanced"
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -87,6 +88,25 @@ class LanguageDialog(QDialog):
         self.beam_spinner.setValue(5)
         layout.addWidget(self.beam_spinner)
 
+        # ── Transcription Profile ──────────────────────────────────────
+        profile_header = QLabel("Transcription Profile")
+        profile_header.setObjectName("FieldLabel")
+        layout.addWidget(profile_header)
+
+        profile_desc = QLabel(
+            "Choose how aggressively silence/music gaps are handled. "
+            "Use 'Pause Resilient' if text gets cut after long pauses."
+        )
+        profile_desc.setObjectName("SentenceDesc")
+        profile_desc.setWordWrap(True)
+        layout.addWidget(profile_desc)
+
+        self.profile_combo = QComboBox()
+        self.profile_combo.addItem("Balanced (Recommended)", "balanced")
+        self.profile_combo.addItem("Pause Resilient (Long Silence/Music)", "pause_resilient")
+        self.profile_combo.addItem("No VAD (Most Permissive)", "no_vad")
+        layout.addWidget(self.profile_combo)
+
         # Separator line
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
@@ -115,4 +135,5 @@ class LanguageDialog(QDialog):
         self.selected_code = WHISPER_LANGUAGES.get(selection)
         self.initial_prompt = self.prompt_input.text().strip()
         self.beam_size = self.beam_spinner.value()
+        self.transcription_profile = self.profile_combo.currentData()
         self.accept()

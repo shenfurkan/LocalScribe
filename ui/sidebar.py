@@ -41,6 +41,7 @@ class Sidebar(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setObjectName("SidebarScroll")
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         
         self.list_container = QWidget()
         self.list_layout = QVBoxLayout(self.list_container)

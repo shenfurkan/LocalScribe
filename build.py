@@ -1,19 +1,153 @@
 """
-build.py
+build.py — Build LocalScribe into a standalone Windows application.
 
-Native Python build script — wraps PyInstaller so users can build
-a distributable without writing shell scripts.
+Wraps PyInstaller so contributors can produce a distributable binary
+without writing shell scripts or remembering flag combinations.
 
-Usage:
-    python build.py
+Usage
+-----
+.. code-block:: bash
+
+    # IMPORTANT: run with the project’s virtual environment Python,
+    # NOT with system Python.  System Python will not have the
+    # required dependencies installed.
+    .\\venv\\Scripts\\python.exe build.py
+
+    # Run validations only (no PyInstaller build).
+    .\\venv\\Scripts\\python.exe build.py --check-only
+
+What it does
+------------
+1. **Preflight check** — imports every required package to fail fast
+   with a helpful message if the venv is not activated.
+2. **Install PyInstaller** — ensures it is available in the venv.
+3. **Run PyInstaller** in ``--onedir --windowed`` mode:
+   - Bundles ``main.py`` as the entry-point.
+   - Includes ``assets/``, ``image/``, ``core/``, ``ui/`` as data
+     directories via ``--add-data``.  This is how
+     ``runtime_manifest.json``, QSS themes, and icons end up inside
+     the ``_internal/`` folder next to the exe.
+4. Output lands in ``dist/LocalScribe/``.
+
+After building, compile the Inno Setup installer (``installer.iss``)
+to produce the final ``dist/LocalScribe_Setup.exe``.
 """
 import os
+import json
+import argparse
+import compileall
 import subprocess
 import sys
+from pathlib import Path
 
 
-def build():
+REQUIRED_IMPORTS = [
+    "PySide6",
+    "faster_whisper",
+    "docx",
+    "fpdf",
+    "argostranslate",
+    "huggingface_hub",
+]
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+
+def _preflight_check():
+    """Fail fast if the build environment is missing required packages."""
+    print("Preflight: checking required packages...")
+    missing = []
+    for mod in REQUIRED_IMPORTS:
+        try:
+            __import__(mod)
+        except ImportError:
+            missing.append(mod)
+    if missing:
+        print("\n[ERROR] The following packages are missing from the current Python environment:")
+        for m in missing:
+            print(f"  - {m}")
+        print(f"\nActive interpreter: {sys.executable}")
+        print("Fix: activate your project venv and run  pip install -r requirements.txt")
+        sys.exit(1)
+    print("Preflight: all required packages found.")
+
+
+def _syntax_check() -> None:
+    """Compile project source files to catch syntax errors early."""
+    print("Preflight: running Python syntax checks...")
+    targets = [
+        PROJECT_ROOT / "main.py",
+        PROJECT_ROOT / "run.py",
+        PROJECT_ROOT / "build.py",
+        PROJECT_ROOT / "core",
+        PROJECT_ROOT / "ui",
+    ]
+
+    ok = True
+    for target in targets:
+        if target.is_dir():
+            ok = compileall.compile_dir(str(target), quiet=1, force=True) and ok
+        else:
+            ok = compileall.compile_file(str(target), quiet=1, force=True) and ok
+
+    if not ok:
+        print("[ERROR] Syntax check failed. Fix Python errors above and retry.")
+        sys.exit(1)
+    print("Preflight: syntax checks passed.")
+
+
+def _runtime_asset_check() -> None:
+    """Validate required runtime metadata/assets before building."""
+    print("Preflight: checking runtime manifest and package assets...")
+
+    manifest_path = PROJECT_ROOT / "core" / "runtime_manifest.json"
+    if not manifest_path.exists():
+        print(f"[ERROR] Missing runtime manifest: {manifest_path}")
+        sys.exit(1)
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+        _ = manifest["whisper_model"]["repo_id"]
+        _ = manifest["whisper_model"]["local_dir_name"]
+        _ = manifest["whisper_model"]["expected_file"]
+    except Exception as exc:
+        print(f"[ERROR] Invalid runtime manifest: {exc}")
+        sys.exit(1)
+
+    try:
+        import faster_whisper  # imported here so missing package reports nicely
+        vad_asset = Path(faster_whisper.__file__).resolve().parent / "assets" / "silero_vad_v6.onnx"
+        if not vad_asset.exists():
+            print(
+                "[ERROR] faster_whisper VAD asset missing from environment:\n"
+                f"  {vad_asset}\n"
+                "Reinstall faster-whisper in the project venv before building."
+            )
+            sys.exit(1)
+    except Exception as exc:
+        print(f"[ERROR] Could not validate faster_whisper assets: {exc}")
+        sys.exit(1)
+
+    print("Preflight: runtime asset checks passed.")
+
+
+def run_prebuild_checks() -> None:
+    """Run all checks that should pass before invoking PyInstaller."""
+    _preflight_check()
+    _syntax_check()
+    _runtime_asset_check()
+
+
+def build(check_only: bool = False):
     print("Starting LocalScribe PyInstaller Build Framework...")
+
+    # 0. Verify all runtime deps are importable before we waste time building.
+    run_prebuild_checks()
+
+    if check_only:
+        print("\nPre-build checks completed successfully. No build was executed (--check-only).")
+        return
 
     # 1. Ensure PyInstaller is available.
     subprocess.run(
@@ -22,48 +156,48 @@ def build():
     )
 
     # 2. Core PyInstaller flags.
+    #    --onedir    → produces a folder (not a single exe) for faster startup.
+    #    --windowed  → hides the console window on launch (GUI app).
+    #    --add-data  → bundles non-Python files into _internal/<dest>.
+    #                   This is how runtime_manifest.json, QSS themes,
+    #                   and icon files are included in the build.
+    #    --collect-data faster_whisper
+    #                 → includes package assets like
+    #                   faster_whisper/assets/silero_vad_v6.onnx used by VAD.
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--noconfirm",
         "--onedir",
-        "--windowed",           # hide the console window on launch
+        "--windowed",
         "--name", "LocalScribe",
         "--icon", f"image{os.sep}LocalScribe.ico",
         "--add-data", f"assets{os.pathsep}assets",
         "--add-data", f"image{os.pathsep}image",
         "--add-data", f"core{os.pathsep}core",
         "--add-data", f"ui{os.pathsep}ui",
+        "--collect-data", "faster_whisper",
     ]
-
-    # 3. Bundle NVIDIA CUDA DLLs if present.
-    #    PyInstaller --add-data / --add-binary do NOT expand globs, so we must
-    #    enumerate each DLL file individually.
-    site_packages = next((p for p in sys.path if "site-packages" in p), None)
-    if site_packages:
-        for pkg in ("cublas", "cudnn"):
-            bin_path = os.path.join(site_packages, "nvidia", pkg, "bin")
-            if os.path.exists(bin_path):
-                for fname in os.listdir(bin_path):
-                    if fname.lower().endswith(".dll"):
-                        full = os.path.join(bin_path, fname)
-                        # Deposit the DLL at the root of the bundle (same dir as the exe).
-                        cmd.extend(["--add-binary", f"{full}{os.pathsep}."])
 
     cmd.append("main.py")
 
-    print("\nExecuting PyInstaller…")
+    print("\nExecuting PyInstaller...")
     subprocess.run(cmd, check=True)
 
-    # 4. Create directories the app expects to find at runtime.
     dist_app_dir = os.path.join("dist", "LocalScribe")
-    os.makedirs(os.path.join(dist_app_dir, "models"), exist_ok=True)
-    os.makedirs(os.path.join(dist_app_dir, "transcripts"), exist_ok=True)
 
     print("\n==================================")
-    print("Build complete! ✨")
-    print(f"ZIP the folder at:  {dist_app_dir}")
+    print("Build complete!")
+    print(f"Output folder:  {dist_app_dir}")
+    print("User data (models, transcripts) is stored in %LOCALAPPDATA%\\LocalScribe")
     print("==================================")
 
 
 if __name__ == "__main__":
-    build()
+    parser = argparse.ArgumentParser(description="Build LocalScribe with preflight checks.")
+    parser.add_argument(
+        "--check-only",
+        action="store_true",
+        help="Run all pre-build checks and exit without running PyInstaller.",
+    )
+    args = parser.parse_args()
+    build(check_only=args.check_only)

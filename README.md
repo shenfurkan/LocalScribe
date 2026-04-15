@@ -40,12 +40,14 @@ LocalScribe/
 ├── main.py                  # The standard entrypoint initializing PySide6
 ├── run.py                   # Convenience launcher (auto-activates the Virtual Env!)
 ├── build.py                 # PyInstaller wrapper logic to compile to standalone .exe
+├── installer.iss            # Inno Setup script to create a Windows installer
 ├── assets/
 │   ├── dark_theme.qss       # Detailed styling engine for Dark Mode
 │   └── light_theme.qss      # Detailed styling engine for Light Mode
 ├── image/
 │   └── LocalScribe.ico      # The application branding and icons
 ├── core/
+│   ├── paths.py             # Centralized data directory resolution (dev vs frozen)
 │   ├── transcriber.py       # Interfaces with faster-whisper and hardware bridging
 │   ├── translator.py        # Logic pipeline for argostranslate text transformation
 │   ├── exporter.py          # PDF/Word processing and string handling
@@ -62,68 +64,175 @@ LocalScribe/
 
 ---
 
-## Installation & Developer Setup
+## Quick Start (End Users)
+
+No Python or technical setup required.
+
+1. Download **`LocalScribe_Setup.exe`** from the [Releases](https://github.com/shenfurkan/LocalScribe/releases) page.
+2. Run the installer and follow the prompts.
+3. Launch **LocalScribe** from the Start Menu or Desktop shortcut.
+4. On first use, the Whisper speech model (~3 GB) downloads automatically — this only happens once.
+
+### Which file should I click?
+
+- **First time / normal users:** click **`LocalScribe_Setup.exe`**.
+- **After installation:** click the **LocalScribe Start Menu/Desktop shortcut** (or `LocalScribe.exe` inside the installed folder).
+- **Do not** copy only `LocalScribe.exe` by itself to another folder/Desktop. It needs its bundled files next to it.
+
+### If you see startup errors
+
+- `Failed to load Python DLL` usually means the app was launched without its bundled files.
+- `No module named 'PySide6'` usually means the installer was built from an incomplete build environment.
+- Fix: rebuild from project venv, then regenerate `LocalScribe_Setup.exe` and re-upload that installer.
+
+### If transcription misses speech after long silence/music
+
+- Open **Advanced Transcription Settings** before starting.
+- Set **Transcription Profile** to:
+  - `Pause Resilient (Long Silence/Music)` for interviews/podcasts with long pauses or music beds.
+  - `No VAD (Most Permissive)` only for difficult edge cases (slower, may include more noise text).
+- Keep language explicit (don’t rely on Auto-Detect) when possible for better stability.
+- LocalScribe also performs an automatic **tail recovery pass** if a suspiciously large ending gap is detected.
+- Recovery diagnostics are saved in transcript metadata (`transcription_diagnostics`) for troubleshooting.
+
+> **FFmpeg** is required for audio decoding. Install it before first use:  
+> *Windows*: `winget install ffmpeg` or download from [ffmpeg.org](https://ffmpeg.org/download.html)  
+> *macOS*: `brew install ffmpeg`  
+> *Linux*: `sudo apt install ffmpeg`
+
+---
+
+## Developer Setup
 
 ### 1. Prerequisites
-- **Python 3.10+**: Ensure Python is correctly added to your System PATH environment variables.  
-- **FFmpeg**: Required. `faster-whisper` depends on **FFmpeg** to decode and ingest audio files accurately.  
-  - *Windows*: Install via `winget install ffmpeg` or download a release and place in your system PATH.
-  - *Mac*: `brew install ffmpeg`
-  - *Linux*: `sudo apt install ffmpeg`
+- **Python 3.10+** on your system PATH
+- **FFmpeg** installed (see above)
 
-### 2. Initialization 
-Pull down the project code:
+### 2. Clone & Environment
 ```bash
 git clone https://github.com/shenfurkan/LocalScribe.git
 cd LocalScribe
-```
-
-### 3. Virtual Environment (Recommended Workflow)
-LocalScribe behaves best isolated in its own virtual environment (to prevent package collisions with CUDA variables). 
-```bash
 python -m venv venv
 ```
 Activate it:  
 - **Windows**: `venv\Scripts\activate`  
 - **macOS/Linux**: `source venv/bin/activate`
 
-### 4. Install Dependencies
+### 3. Install Dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 5. Start the Application
-You can fire up the program utilizing the clever helper:
+### 4. Run
 ```bash
 python run.py
 ```
-*(Notice: If you execute `run.py` from the global PATH accidentally but a `/venv` is present, `run.py` automatically terminates itself, discovers the venv, and restarts `main.py` properly within the isolated path!)*
+`run.py` auto-detects the local virtual environment and relaunches inside it if needed.
+
+### 5. Environment Recovery (Windows)
+
+If `python run.py` reports a broken or stale virtual environment, use the repair script:
+
+```powershell
+.\repair_env.ps1
+```
+
+| Flag | Purpose |
+|---|---|
+| `-UseDotVenv` | Create `.venv` instead of `venv` |
+| `-Yes` | Skip the delete-confirmation prompt |
+| `-AllowStorePython` | Allow the Windows Store Python alias |
 
 ---
 
-## Building a Standalone Executable Application
+## Building & Packaging
 
-Tired of using Python to launch? Want to share LocalScribe with a friend who has zero technical background? We've designed a specialized zero-setup packaging infrastructure to convert the entire application suite into a portable standalone software file.
-
-Just execute the provided build framework from the Root Environment:
+### Step 1 — Build with PyInstaller
 ```bash
 python build.py
 ```
+This produces a portable folder at `dist/LocalScribe/` containing the exe and all dependencies.
 
-### How the build pipeline works:
-1. **Validates Installations**: Automatically imports `PyInstaller` if missing.
-2. **Flags Configured**: Disables the development console, integrates `image/LocalScribe.ico`, configures `--onedir` execution path.
-3. **Appends Static Assets**: Traverses the source, injecting `/assets`, `/image`, `/core`, `/ui` ensuring styling sheets, icons, and nested views resolve exactly correctly in a production format.
-4. **Scans GPU Bridges**: Programmatically discovers any present NVIDIA cuDNN or CUDA (`cublas`) `.dll` files in your running environment mapping them explicitly into the packaged app natively, guaranteeing standalone hardware acceleration without needing local CUDA installation configurations.
-5. **Generates Software**: Your completely portable application will drop directly inside `/dist/LocalScribe` ready to be zipped and shared!
+### Step 2 — Create the Installer (optional)
+Install [Inno Setup 6](https://jrsoftware.org/isdl.php), then compile the included script:
+```
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+```
+This generates `dist/LocalScribe_Setup.exe` — a single installer file you can upload to GitHub Releases.
+
+### One-command publisher workflow (recommended)
+
+From project root:
+
+```powershell
+.\release_installer.ps1
+```
+
+This script is fail-fast and will:
+- Verify local venv Python exists
+- Verify Inno Setup compiler exists
+- Clean previous build outputs
+- Run `build.py`
+- Compile `installer.iss`
+- Confirm `dist\LocalScribe_Setup.exe` exists
+
+If you already built and only want installer recompilation:
+
+```powershell
+.\release_installer.ps1 -SkipBuild
+```
+
+### Release checklist (recommended)
+
+1. Build from the project venv:
+   ```bash
+   python build.py
+   ```
+2. Compile installer:
+   ```
+   "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+   ```
+3. Test on a clean machine (or VM):
+   - Run `LocalScribe_Setup.exe`
+   - Launch app from Start Menu
+   - Confirm first-run model download starts
+4. Upload only the tested `dist/LocalScribe_Setup.exe` to GitHub Releases.
+
+See `docs/distribution_policy.md` for the full good/bad scenario matrix and update policy.
 
 ---
 
-## Setup Details & Data Privacy Policies 
+## Data Storage & Privacy
 
-The privacy focus of LocalScribe dictates how it manages large AI data:
-* **The Transcriber Model**: Before the engine runs offline for the first time, LocalScribe downloads a massive open-source dictionary weight model from Hugging Face (`~1 to ~3 GB` depending on settings) to process speech. You will see an indicator mapping this transfer. **Once cached into `/models/`, LocalScribe will never ping the internet again.**
-* **Translation Logic**: Translation models are locally cached upon a language pack request. After the download triggers once per language pair (e.g., English -> Spanish), it operates 100% offline. 
-* **Your Files**: The host audio/video and consequent transcribed items are permanently tethered implicitly to your own hard drives configuration (within `/transcripts`). Usage telemetry, tracking, and remote calls **do not exist** anywhere in the source logic. 
+LocalScribe stores all user data in OS-standard locations — never next to the executable:
 
-Enjoy your studio quality private subtitles!
+| Platform | Data Directory |
+|---|---|
+| **Windows** | `%LOCALAPPDATA%\LocalScribe\` |
+| **macOS** | `~/Library/Application Support/LocalScribe/` |
+| **Linux** | `~/.local/share/LocalScribe/` |
+
+Inside that directory:
+* **`models/`** — The Whisper speech model (~3 GB). Downloaded once on first launch from Hugging Face, then used entirely offline.
+* **`transcripts/`** — Your transcript JSON files and index.
+
+**Privacy**: No telemetry, no tracking, no cloud calls. All audio processing happens locally. Translation models (via ArgosTranslate) are also cached locally after a one-time download per language pair.
+
+> When running from source (developer mode), data is stored in the project directory instead for convenience.
+
+---
+
+## Acknowledgements & Inspiration
+
+LocalScribe is built on top of excellent open-source projects. Huge thanks to these communities and maintainers:
+
+- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (SYSTRAN) — core speech-to-text engine used by LocalScribe.
+- [OpenAI Whisper](https://github.com/openai/whisper) — foundational speech recognition model architecture and research that inspired the ecosystem.
+- [CTranslate2](https://github.com/OpenNMT/CTranslate2) — high-performance inference runtime used under `faster-whisper`.
+- [Hugging Face Hub](https://huggingface.co/docs/huggingface_hub/) — model hosting and download SDK used during first-run setup.
+- [Systran/faster-whisper-large-v3](https://huggingface.co/Systran/faster-whisper-large-v3) — Whisper model repository downloaded for local inference.
+- [Argos Translate](https://github.com/argosopentech/argos-translate) — offline translation engine integration.
+- [PySide6 / Qt for Python](https://doc.qt.io/qtforpython/) — desktop UI framework.
+- [python-docx](https://github.com/python-openxml/python-docx) and [fpdf2](https://github.com/py-pdf/fpdf2) — document export support.
+- [FFmpeg](https://ffmpeg.org/) — audio decoding backend used before transcription.
+- [PyInstaller](https://pyinstaller.org/) and [Inno Setup](https://jrsoftware.org/isinfo.php) — Windows packaging and installer tooling.

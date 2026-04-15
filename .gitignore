@@ -13,10 +13,12 @@ env/
 build/
 dist/
 *.spec
+*_Setup.exe
 
 # Storage Directories
 models/
 transcripts/
+setup_state.json
 
 # IDE / Editor
 .idea/

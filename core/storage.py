@@ -13,6 +13,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+from core.paths import transcripts_dir
+
 # A strict UUID-v4 pattern used to validate transcript IDs before we build
 # file paths from them.  This prevents any path-traversal attack.
 _UUID_RE = re.compile(
@@ -27,15 +29,7 @@ def _valid_id(transcript_id: str) -> bool:
 
 
 class StorageManager:
-    # Resolve paths at class-definition time using *absolute* references so
-    # that os.chdir() calls elsewhere in the app have no effect.
-    if getattr(sys, "frozen", False):
-        # Running as a compiled PyInstaller executable.
-        _base_dir = Path(sys.executable).parent
-    else:
-        _base_dir = Path(__file__).resolve().parent.parent
-
-    TRANSCRIPTS_DIR: Path = _base_dir / "transcripts"
+    TRANSCRIPTS_DIR: Path = transcripts_dir()
     INDEX_FILE: Path = TRANSCRIPTS_DIR / "index.json"
 
     def __init__(self):

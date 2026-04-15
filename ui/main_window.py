@@ -4,6 +4,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QThread, QPropertyAnimation, QRect, QEasingCurve
 from PySide6.QtGui import QScreen
 import os
+from pathlib import Path
 
 from ui.sidebar import Sidebar
 from ui.dashboard_page import DashboardPage
@@ -83,12 +84,8 @@ class MainWindow(QMainWindow):
     def _apply_current_theme(self):
         theme = self.storage.get_setting("theme", "dark")
 
-        import sys
-        if getattr(sys, 'frozen', False):
-            base_dir = os.path.dirname(sys.executable)
-        else:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            base_dir = os.path.dirname(base_dir)
+        from core.paths import app_bundle_dir
+        base_dir = str(app_bundle_dir())
 
         qss_filename = "dark_theme.qss" if theme == "dark" else "light_theme.qss"
         qss_path = os.path.join(base_dir, "assets", qss_filename)
@@ -115,10 +112,15 @@ class MainWindow(QMainWindow):
     # ───────────────────────────────────────────────────────────────────
 
     def _start_model_preload(self):
-        """
-        Kick off a background thread that loads the Whisper model so the
-        first transcription starts immediately instead of stalling while
-        the 3 GB model initialises.
+        """Pre-load the Whisper model into RAM in a background thread.
+
+        By the time the user reaches this point, ``main.py`` has already
+        confirmed that the model binary exists on disk (via the setup
+        dialog).  This step loads the ~3 GB file into RAM so that the
+        first transcription starts instantly instead of stalling.
+
+        Uses the Qt worker-object pattern (moveToThread).  The sidebar
+        shows a status indicator while loading is in progress.
         """
         from core.transcriber import ModelPreloadWorker
 
@@ -140,19 +142,22 @@ class MainWindow(QMainWindow):
         self._preload_thread.start()
 
     def _on_preload_status(self, msg: str):
+        """Update sidebar status while model loads into RAM."""
         self.sidebar.set_status(f"⚙ {msg}")
 
     def _on_preload_done(self):
+        """Model is warm — transcriptions will start instantly."""
         self.sidebar.set_status("✓ Model ready")
 
     def _on_preload_error(self, err: str):
+        """Model failed to load — show a clear error with recovery steps."""
         self.sidebar.set_status("⚠ Model load failed")
         from PySide6.QtWidgets import QMessageBox
         QMessageBox.critical(
             self, "Model Load Error",
             f"The Whisper model could not be loaded:\n\n{err}\n\n"
-            "Check that you have an internet connection on first run "
-            "and that Python/CUDA dependencies are installed correctly."
+            "Try restarting LocalScribe. If the problem persists, "
+            "delete the models folder and re-run first-time setup."
         )
 
     # ───────────────────────────────────────────────────────────────────

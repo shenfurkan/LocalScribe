@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel
+from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy
 from PySide6.QtCore import Signal, Qt
 
 
@@ -18,6 +18,7 @@ class TranscriptCard(QFrame):
         name_label = QLabel(transcript_data.get("name", "Unknown File"))
         name_label.setObjectName("CardName")
         name_label.setWordWrap(True)
+        name_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
 
         # ── Language + duration row ────────────────────────────────────────
         lang = str(transcript_data.get("language", "?")).upper()

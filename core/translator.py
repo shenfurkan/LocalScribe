@@ -26,7 +26,7 @@ class TranslationWorker(QObject):
             
             if not from_lang or not to_lang:
                 self.error.emit(
-                    f"Translation model {self.from_code}â†’{self.to_code} not installed."
+                    f"Translation model {self.from_code}->{self.to_code} not installed."
                 )
                 return
             
@@ -69,7 +69,7 @@ class PackageInstallWorker(QObject):
             
             if not pkg:
                 self.error.emit(
-                    f"No direct model found for {self.from_code} â†’ {self.to_code}."
+                    f"No direct model found for {self.from_code} -> {self.to_code}."
                 )
                 return
             
