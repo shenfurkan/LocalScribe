@@ -292,6 +292,10 @@ class DashboardPage(QWidget):
         self.transcription_completed.emit(tid)
 
     def _on_error(self, err_msg: str):
+        if self._current_transcript_id is None:
+            self._reset_ui()
+            return
+            
         data = self.storage.load(self._current_transcript_id)
         if data:
             data["status"] = "failed"

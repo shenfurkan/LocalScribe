@@ -1,4 +1,3 @@
-; ============================================================================
 ; LocalScribe — Inno Setup Installer Script
 ; ============================================================================
 ;
@@ -26,7 +25,7 @@
 [Setup]
 ; Unique GUID — must remain constant across versions so Windows
 ; recognises this as an upgrade rather than a separate install.
-AppId={{B7E3F2A1-4C8D-4E9F-A1B2-3C4D5E6F7A8B}
+AppId={{B0674E23-FD85-42F0-8C29-3A994EE8EA86}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}

@@ -1,5 +1,6 @@
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QHBoxLayout, QSplitter, QStackedWidget, QApplication
+    QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter, 
+    QStackedWidget, QApplication, QLabel, QPushButton
 )
 from PySide6.QtCore import Qt, QThread, QPropertyAnimation, QRect, QEasingCurve
 from PySide6.QtGui import QScreen
@@ -25,9 +26,32 @@ class MainWindow(QMainWindow):
         # ── Central layout: sidebar | stacked content ──────────────────
         central = QWidget()
         self.setCentralWidget(central)
-        root_layout = QHBoxLayout(central)
+        root_layout = QVBoxLayout(central)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
+
+        # ── Notification Bar ───────────────────────────────────────────
+        self.notification_bar = QWidget()
+        self.notification_bar.hide()
+        self.notification_bar.setStyleSheet("background-color: #0EA5E9; color: white;")
+        notif_layout = QHBoxLayout(self.notification_bar)
+        notif_layout.setContentsMargins(16, 8, 16, 8)
+        self.notif_label = QLabel("A new version of LocalScribe is available!")
+        self.notif_label.setStyleSheet("font-weight: bold; font-size: 10pt; background: transparent;")
+        self.notif_btn = QPushButton("Download")
+        self.notif_btn.setStyleSheet("background-color: white; color: #0EA5E9; border-radius: 4px; padding: 4px 16px; font-weight: bold;")
+        self.notif_btn.setCursor(Qt.PointingHandCursor)
+        self.notif_close = QPushButton("✕")
+        self.notif_close.setFlat(True)
+        self.notif_close.setStyleSheet("color: white; font-weight: bold; font-size: 12pt; border: none; background: transparent;")
+        self.notif_close.setCursor(Qt.PointingHandCursor)
+        self.notif_close.clicked.connect(self.notification_bar.hide)
+        notif_layout.addWidget(self.notif_label)
+        notif_layout.addStretch()
+        notif_layout.addWidget(self.notif_btn)
+        notif_layout.addWidget(self.notif_close)
+        
+        root_layout.addWidget(self.notification_bar)
 
         self.sidebar = Sidebar(self.storage)
 
@@ -44,7 +68,7 @@ class MainWindow(QMainWindow):
         splitter.setHandleWidth(1)
         splitter.setChildrenCollapsible(False)
 
-        root_layout.addWidget(splitter)
+        root_layout.addWidget(splitter, 1)
 
         # ── Signal wiring ──────────────────────────────────────────────
         # Sidebar navigation
@@ -80,6 +104,7 @@ class MainWindow(QMainWindow):
         # ── Pre-load the model in the background ───────────────────────
         self._start_model_preload()
         self._apply_current_theme()
+        self._start_update_checker()
 
     def _apply_current_theme(self):
         theme = self.storage.get_setting("theme", "dark")
@@ -159,6 +184,37 @@ class MainWindow(QMainWindow):
             "Try restarting LocalScribe. If the problem persists, "
             "delete the models folder and re-run first-time setup."
         )
+
+    # ───────────────────────────────────────────────────────────────────
+    # Update checker logic
+    # ───────────────────────────────────────────────────────────────────
+
+    def _start_update_checker(self):
+        """Starts a background worker to check github for updates."""
+        from core.update_checker import UpdateCheckerWorker
+
+        self._update_worker = UpdateCheckerWorker()
+        self._update_thread = QThread(self)
+        self._update_worker.moveToThread(self._update_thread)
+        self._update_thread.started.connect(self._update_worker.run)
+
+        # Success path
+        self._update_worker.update_available.connect(self._on_update_available)
+        self._update_worker.update_available.connect(self._update_thread.quit)
+        self._update_worker.update_available.connect(self._update_worker.deleteLater)
+
+        # Error / completed gracefully (e.g. no update)
+        self._update_worker.error.connect(self._update_thread.quit)
+        self._update_worker.error.connect(self._update_worker.deleteLater)
+
+        self._update_thread.finished.connect(self._update_thread.deleteLater)
+        self._update_thread.start()
+
+    def _on_update_available(self, version: str, url: str):
+        self.notif_label.setText(f"A new version of LocalScribe has been released: v{version}")
+        import webbrowser
+        self.notif_btn.clicked.connect(lambda: webbrowser.open(url))
+        self.notification_bar.show()
 
     # ───────────────────────────────────────────────────────────────────
     # Navigation helpers

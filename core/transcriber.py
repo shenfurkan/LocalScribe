@@ -332,7 +332,7 @@ class TranscriptionWorker(QObject):
                 self.finished.emit(result)
 
         except Exception as exc:
-            logging.error(f"Transcription error: {exc}", exc_info=True)
+            logging.error("Transcription error: %s", exc, exc_info=True)
             self.error.emit(str(exc))
 
 

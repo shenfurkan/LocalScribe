@@ -29,11 +29,10 @@ def _valid_id(transcript_id: str) -> bool:
 
 
 class StorageManager:
-    TRANSCRIPTS_DIR: Path = transcripts_dir()
-    INDEX_FILE: Path = TRANSCRIPTS_DIR / "index.json"
-
     def __init__(self):
-        self.TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
+        self.transcripts_dir = transcripts_dir()
+        self.index_file = self.transcripts_dir / "index.json"
+        self.transcripts_dir.mkdir(parents=True, exist_ok=True)
         self._index_cache: dict = {}
         self.settings: dict = {"theme": "dark"}
         self._load_index()
@@ -41,9 +40,9 @@ class StorageManager:
     # ── Index I/O ─────────────────────────────────────────────────────────────
 
     def _load_index(self) -> None:
-        if self.INDEX_FILE.exists():
+        if self.index_file.exists():
             try:
-                with open(self.INDEX_FILE, "r", encoding="utf-8") as fh:
+                with open(self.index_file, "r", encoding="utf-8") as fh:
                     raw = json.load(fh)
                 # Pop settings first so _index_cache stays clean.
                 if isinstance(raw, dict):
@@ -55,7 +54,7 @@ class StorageManager:
 
         # Fallback: rebuild from individual JSON files.
         self._index_cache = {}
-        for fp in self.TRANSCRIPTS_DIR.glob("*.json"):
+        for fp in self.transcripts_dir.glob("*.json"):
             if fp.name == "index.json":
                 continue
             try:
@@ -71,10 +70,10 @@ class StorageManager:
     def _save_index(self) -> None:
         try:
             payload = {**self._index_cache, "_settings": self.settings}
-            tmp_path = self.INDEX_FILE.with_suffix(".tmp")
+            tmp_path = self.index_file.with_suffix(".tmp")
             with open(tmp_path, "w", encoding="utf-8") as fh:
                 json.dump(payload, fh, ensure_ascii=False)
-            tmp_path.replace(self.INDEX_FILE)
+            tmp_path.replace(self.index_file)
         except Exception as exc:
             logging.error("Error saving index: %s", exc)
 
@@ -108,7 +107,7 @@ class StorageManager:
         """
         if not _valid_id(transcript_id):
             raise ValueError(f"Invalid transcript ID: {transcript_id!r}")
-        return self.TRANSCRIPTS_DIR / f"{transcript_id}.json"
+        return self.transcripts_dir / f"{transcript_id}.json"
 
     # ── Public CRUD ───────────────────────────────────────────────────────────
 

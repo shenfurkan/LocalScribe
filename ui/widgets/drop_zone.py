@@ -55,12 +55,22 @@ class DropZone(QWidget):
     def dropEvent(self, event: QDropEvent):
         self.setProperty("dragging", False)
         self.style().polish(self)
-        paths = [
-            url.toLocalFile() for url in event.mimeData().urls()
-            if url.toLocalFile().lower().endswith(tuple(SUPPORTED_EXTENSIONS))
-        ]
-        if paths:
-            self.files_dropped.emit(paths)
+        valid_paths = []
+        for url in event.mimeData().urls():
+            path = url.toLocalFile()
+            if path.lower().endswith(tuple(SUPPORTED_EXTENSIONS)):
+                import os
+                try:
+                    size = os.path.getsize(path)
+                    if size > 10 * 1024 * 1024 * 1024:
+                        from PySide6.QtWidgets import QMessageBox
+                        QMessageBox.warning(self, "File Too Large", f"The file '{os.path.basename(path)}' exceeds the 10GB size limit.")
+                        continue
+                    valid_paths.append(path)
+                except Exception:
+                    pass
+        if valid_paths:
+            self.files_dropped.emit(valid_paths)
             
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:

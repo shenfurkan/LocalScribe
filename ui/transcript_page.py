@@ -369,8 +369,12 @@ class TranscriptPage(QWidget):
             for seg in segs:
                 safetext = html.escape(seg.get('text', ''))
                 if self._show_timestamps and "start" in seg:
-                    ts_str = _readable_time(seg['start'])
-                    link = f'<a href="ts:{seg["start"]}">{ts_str}</a>'
+                    try:
+                        start_val = float(seg["start"])
+                    except (ValueError, TypeError):
+                        start_val = 0.0
+                    ts_str = _readable_time(start_val)
+                    link = f'<a href="ts:{start_val}">{ts_str}</a>'
                     html_parts.append(f"{link}  {safetext}")
                 else:
                     html_parts.append(safetext)

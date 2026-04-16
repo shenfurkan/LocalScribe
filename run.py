@@ -150,7 +150,11 @@ def launch():
         _print_missing_modules_help(current_python, missing)
         return 1
 
-    result = subprocess.run([sys.executable, str(main_script)], cwd=str(project_root))
+    result = subprocess.run(
+        [sys.executable, str(main_script)],
+        cwd=str(project_root),
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+    )
     return result.returncode
 
 

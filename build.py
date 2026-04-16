@@ -203,7 +203,13 @@ def build(check_only: bool = False):
         "--collect-data", "faster_whisper",
         "--collect-data", "ctranslate2",
         "--collect-binaries", "ctranslate2",
+        "--exclude-module", "tensorflow",
+        "--exclude-module", "tensorboard",
+        "--exclude-module", "sympy",
+        "--exclude-module", "matplotlib",
+        "--exclude-module", "tkinter",
     ]
+
 
     cmd.append("main.py")
 

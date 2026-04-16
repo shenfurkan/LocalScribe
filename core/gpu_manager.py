@@ -98,6 +98,21 @@ def _detect_via_ctranslate2() -> Optional[GPUInfo]:
         except Exception:
             pass
 
+        # STRICT CHECK: CTranslate2 4.x > 4.0 does not bundle cuBLAS.
+        # It gets the device count via the display driver, but will completely
+        # crash during transcription if the CUDA Toolkit isn't present.
+        if os.name == "nt":
+            import ctypes
+            try:
+                # Test for CUDA 12 first, then CUDA 11
+                try:
+                    ctypes.WinDLL("cublas64_12.dll")
+                except OSError:
+                    ctypes.WinDLL("cublas64_11.dll")
+            except OSError:
+                logger.warning("NVIDIA GPU found, but cuBLAS libraries are missing. Falling back to CPU.")
+                return None
+
         # Try nvidia-smi for device name and VRAM (supplementary info)
         name, driver, vram = _nvidia_smi_query()
 
@@ -122,6 +137,17 @@ def _detect_via_nvidia_smi() -> Optional[GPUInfo]:
     name, driver, vram = _nvidia_smi_query()
     if not name:
         return None
+
+    if os.name == "nt":
+        import ctypes
+        try:
+            try:
+                ctypes.WinDLL("cublas64_12.dll")
+            except OSError:
+                ctypes.WinDLL("cublas64_11.dll")
+        except OSError:
+            logger.warning("NVIDIA GPU (nvidia-smi) found, but cuBLAS missing. Falling back to CPU.")
+            return None
 
     return GPUInfo(
         cuda_available=True,
@@ -242,6 +268,14 @@ def ensure_cuda_env() -> None:
             os.path.join(sys.base_prefix, "Lib", "site-packages"),
         ]
     ))
+    
+    # In PyInstaller, the pip package structure is dumped directly
+    # into _internal. We must add it to candidates so the next loop
+    # can explicitly append _internal/nvidia/cublas/bin, etc.
+    if getattr(sys, "frozen", False):
+        internal = os.path.join(os.path.dirname(sys.executable), "_internal")
+        if os.path.isdir(internal):
+            candidate_roots.append(internal)
     for root in candidate_roots:
         for pkg in nvidia_pkgs:
             bin_path = os.path.join(root, "nvidia", pkg, "bin")

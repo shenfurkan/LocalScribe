@@ -29,6 +29,7 @@ import os
 import re
 import shutil
 import socket
+import sys
 import time
 from pathlib import Path
 
@@ -36,8 +37,18 @@ import threading
 
 from PySide6.QtCore import QObject, Signal
 from huggingface_hub import HfApi, hf_hub_download
+import huggingface_hub.utils as hf_utils
 
 from core.paths import models_dir, data_root
+
+_worker_ctx = threading.local()
+
+class _ProgressTqdm(hf_utils.tqdm):
+    def update(self, n=1):
+        super().update(n)
+        worker = getattr(_worker_ctx, "current_worker", None)
+        if worker and self.total:
+            worker.chunk_downloaded(self.n)
 
 # Path to the JSON manifest that declares which models to download.
 # In a PyInstaller bundle this resolves to  _internal/core/runtime_manifest.json
@@ -95,7 +106,12 @@ def save_setup_state(state: dict) -> None:
     tmp = p.with_suffix(".tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2)
-    tmp.replace(p)
+    try:
+        import os
+        os.replace(tmp, p)
+    except Exception:
+        import shutil
+        shutil.move(tmp, p)
 
 
 def is_model_ready() -> bool:
@@ -159,6 +175,16 @@ class SetupWorker(QObject):
     def __init__(self):
         super().__init__()
         self._cancel_requested = False
+        self._global_bytes_total = 0
+        self._global_bytes_done = 0
+        self._current_file_done = 0
+
+    def chunk_downloaded(self, n_bytes: int):
+        self._current_file_done = n_bytes
+        current_total = self._global_bytes_done + n_bytes
+        if self._global_bytes_total > 0:
+            pct = int((current_total / self._global_bytes_total) * 100)
+            self.progress.emit(min(99, pct))
 
     def _log(self, text: str) -> None:
         """Log a message to the console and emit a signal."""
@@ -330,16 +356,17 @@ class SetupWorker(QObject):
         # These env vars are respected by huggingface_hub.
         os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
         os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "30")
-        os.environ.setdefault("HF_HUB_ENABLE_HF_XET", "1")
 
-        # Optional visibility: let users know accelerated backend is available.
-        try:
-            import hf_xet  # noqa: F401
-            self._log("HF transfer backend: hf_xet enabled (accelerated).")
-        except Exception:
-            self._log("HF transfer backend: standard HTTP (hf_xet not available).")
+        # Force disabled HF transfer methods to ensure pure chunk streaming with tqdm
+        os.environ["HF_HUB_ENABLE_HF_XET"] = "0"
+        os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+        
+        # Monkey patch Hugging Face's tqdm instance in file_download where it is actually used
+        import huggingface_hub.file_download as hf_fd
+        original_tqdm = hf_fd.tqdm
+        hf_fd.tqdm = _ProgressTqdm
+        _worker_ctx.current_worker = self
 
-        # Collect all files in the repo except .gitattributes (not useful).
         siblings = [
             s for s in (info.siblings or [])
             if getattr(s, "rfilename", None) and s.rfilename != ".gitattributes"
@@ -347,79 +374,19 @@ class SetupWorker(QObject):
         if not siblings:
             raise RuntimeError(f"No files found in model repository: {repo_id}")
 
-        total_bytes = sum((getattr(s, "size", 0) or 0) for s in siblings)
+        self._global_bytes_total = sum((getattr(s, "size", 0) or 0) for s in siblings)
+        self._global_bytes_done = 0
         total_files = len(siblings)
-        started_all = time.time()
-
-        self._log(f"Repository: https://huggingface.co/{repo_id}")
-        if total_bytes > 0:
-            self._log(f"Planned download size: {_format_bytes(total_bytes)}")
-
-        # ── Disk-polling progress tracker ─────────────────────────────────
-        # Resolve every directory where the active download backend may write
-        # its intermediate data.  We scan all three so that:
-        #   • local_dir       — final destination (copied here after download)
-        #   • hub_model_cache — HF hub blob store (staging for hf_hub_download)
-        #   • xet_cache       — hf_xet chunk cache (grows as model.bin streams)
-        hf_home = Path(
-            os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface")
-        )
-        hub_model_cache = (
-            hf_home / "hub" / ("models--" + repo_id.replace("/", "--"))
-        )
-        xet_cache = Path(
-            os.environ.get("HF_XET_CACHE", hf_home / "xet")
-        )
-        _poll_dirs = [local_dir, hub_model_cache, xet_cache]
-
-        def _dir_bytes(path: Path) -> int:
-            """Sum sizes of all files under *path* using os.walk (fast on Windows)."""
-            total = 0
-            try:
-                for root, _, fnames in os.walk(path):
-                    for fname in fnames:
-                        try:
-                            total += os.path.getsize(os.path.join(root, fname))
-                        except OSError:
-                            pass
-            except OSError:
-                pass
-            return total
-
-        # Record how many bytes are already on disk so that files from a
-        # previous (partial) run do not inflate the reported progress.
-        _baseline = sum(_dir_bytes(d) for d in _poll_dirs)
-
-        _stop_poll = threading.Event()
-
-        def _poll_progress() -> None:
-            """Runs on a daemon thread; emits progress signals every 0.75 s."""
-            while not _stop_poll.wait(0.75):
-                on_disk = sum(_dir_bytes(d) for d in _poll_dirs)
-                new_bytes = max(0, on_disk - _baseline)
-                if total_bytes > 0:
-                    # Cap at 99 — 100 is only emitted by _on_finished after
-                    # post-download validation passes.
-                    pct = int(min(99, (new_bytes * 100) / total_bytes))
-                else:
-                    pct = 0
-                self.progress.emit(pct)
-                self.status_update.emit(f"Downloading Whisper model... {pct}%")
-
-        _poll_thread = threading.Thread(
-            target=_poll_progress, daemon=True, name="ls-progress-poll"
-        )
-        _poll_thread.start()
 
         self.progress.emit(0)
-        self.status_update.emit("Downloading Whisper model... 0%")
+        self.status_update.emit("Downloading Model Data")
 
-        bytes_committed = 0  # bytes from fully-completed files (for speed log)
         try:
             for idx, sibling in enumerate(siblings, start=1):
                 self._check_cancel()
+                self._current_file_done = 0
                 filename = sibling.rfilename
-                self.file_status.emit(f"File {idx}/{total_files}: {filename}")
+                self.file_status.emit(f"File {idx} of {total_files}: {filename}")
 
                 local_path = self._download_file_with_retry(
                     repo_id=repo_id,
@@ -428,25 +395,12 @@ class SetupWorker(QObject):
                     local_dir=local_dir,
                 )
 
-                local_path_obj = Path(local_path)
-                file_size = (
-                    local_path_obj.stat().st_size
-                    if local_path_obj.exists()
-                    else (getattr(sibling, "size", 0) or 0)
-                )
-                bytes_committed += file_size
-
-                elapsed_total = max(time.time() - started_all, 0.001)
-                avg_speed = bytes_committed / elapsed_total
-                self._log(
-                    f"File {idx}/{total_files} complete: {filename} | "
-                    f"Avg: {_format_speed(avg_speed)}"
-                )
-                self._check_cancel()
+                file_size = getattr(sibling, "size", 0) or 0
+                self._global_bytes_done += file_size
         finally:
-            # Always stop the polling thread, even if download fails.
-            _stop_poll.set()
-            _poll_thread.join(timeout=3)
+            # Restore class attributes context properly
+            hf_fd.tqdm = original_tqdm
+            _worker_ctx.current_worker = None
 
 
 

@@ -52,8 +52,7 @@ def get_llm(repo_id: str = DEFAULT_REPO, filename: str = DEFAULT_FILE, progress_
                         repo_id=repo_id,
                         filename=filename,
                         cache_dir=root,
-                        local_dir=root, # Places the file directly in our models folder
-                        local_dir_use_symlinks=False
+                        local_dir=root # Places the file directly in our models folder
                     )
                     
                     if progress_callback:
@@ -72,7 +71,7 @@ def get_llm(repo_id: str = DEFAULT_REPO, filename: str = DEFAULT_FILE, progress_
                     logging.info("LLM loaded successfully.")
                 except Exception as e:
                     logging.error(f"Failed to load LLM: {str(e)}")
-                    raise e
+                    raise
     return _llm
 
 
