@@ -73,6 +73,11 @@ os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 # so tqdm's bars would appear as garbage in the log view anyway.
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
+# Enable Xet-backed download acceleration when available.
+# huggingface_hub >= 0.32 can use hf_xet for faster chunk-based downloads.
+# If hf_xet is not installed, huggingface_hub transparently falls back.
+os.environ.setdefault("HF_HUB_ENABLE_HF_XET", "1")
+
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QFont, QIcon
 from core.setup_manager import is_model_ready

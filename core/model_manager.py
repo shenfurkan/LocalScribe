@@ -1,5 +1,4 @@
-"""
-core/model_manager.py — Thread-safe singleton for the Whisper model.
+"""core/model_manager.py — Thread-safe singleton for the Whisper model.
 
 The faster-whisper ``WhisperModel`` object holds the full 3 GB model
 in RAM (or VRAM).  Creating it takes several seconds, so we load it
@@ -11,13 +10,14 @@ A ``threading.Lock`` with **double-checked locking** guarantees that
 even if two QThreads call ``get_model()`` simultaneously, only one
 thread will actually instantiate the model.
 
-CUDA path injection (Windows-specific)
---------------------------------------
-NVIDIA ships CUDA runtime DLLs inside pip packages (e.g.
-``nvidia-cublas-cu12``).  On Windows, Python ≥ 3.8 requires an
-explicit call to ``os.add_dll_directory()`` before these DLLs can be
-found.  ``_inject_cuda_paths_once()`` scans known locations and
-registers them once per process lifetime.
+GPU acceleration
+----------------
+Hardware detection and CUDA environment configuration are delegated to
+``core.gpu_manager``.  That module probes CTranslate2's built-in CUDA
+runtime first (most reliable), falls back to nvidia-smi, then to DLL
+loading.  ``gpu_manager.ensure_cuda_env()`` registers all necessary
+DLL directories so that PyInstaller-bundled builds find cuBLAS / cuDNN
+at runtime.
 
 Fail-fast design
 -----------------
@@ -27,122 +27,23 @@ with an actionable message, forcing the user back through the setup
 dialog.
 """
 import os
-import sys
-import ctypes
 import logging
 import threading
 from pathlib import Path
 
 from faster_whisper import WhisperModel
 from core.paths import models_dir
+from core.gpu_manager import detect_gpu, ensure_cuda_env, optimal_compute_type, optimal_cpu_threads
 
 # ── Module-level state ──────────────────────────────────────────────────────────
 _model: WhisperModel | None = None       # cached singleton; set once
 _model_lock = threading.Lock()            # serialises first-load attempts
 _model_error: str | None = None           # last error message (for UI)
-_cuda_paths_injected = False              # guard: only inject DLL paths once per process
-_cuda_dll_dir_handles: list = []          # prevent GC of os.add_dll_directory handles
 
 # Minimum acceptable size (bytes) for the model binary.
 # The real model.bin is ~3 GB; 1 GB rejects partial / interrupted downloads.
 _MIN_MODEL_BIN_BYTES = 1_000_000_000
 
-
-# ── CUDA DLL helpers ──────────────────────────────────────────────────────────
-
-def _inject_cuda_paths_once() -> None:
-    """Register NVIDIA pip-package DLL directories with the Windows loader.
-
-    Since Python 3.8 on Windows, DLLs are no longer found via ``%PATH%``
-    alone — they must be registered with ``os.add_dll_directory()``.
-    We also prepend to ``%PATH%`` for ctypes and subprocess compatibility.
-
-    Called at most once per process lifetime (guarded by
-    ``_cuda_paths_injected``).  On non-Windows systems this is a no-op.
-    """
-    global _cuda_paths_injected
-    if _cuda_paths_injected or os.name != "nt":
-        return
-
-    # Gather all plausible site-packages directories.  In a PyInstaller
-    # bundle the DLLs may live under  _internal/  next to the exe.
-    candidate_roots = list(dict.fromkeys(
-        [
-            p for p in sys.path
-            if isinstance(p, str)
-            and ("site-packages" in p or "dist-packages" in p)
-        ] + [
-            os.path.join(sys.prefix, "Lib", "site-packages"),
-            os.path.join(sys.base_prefix, "Lib", "site-packages"),
-            os.path.join(os.path.dirname(sys.executable), "_internal"),
-            os.path.dirname(sys.executable),
-        ]
-    ))
-
-    # NVIDIA ships each CUDA library in its own pip package with a
-    # ``bin/`` subfolder containing the actual DLLs.
-    candidate_bins: list[str] = []
-    nvidia_pkgs = (
-        "cublas",
-        "cudnn",
-        "cuda_runtime",
-        "cuda_nvrtc",
-        "cufft",
-        "curand",
-        "cusolver",
-        "cusparse",
-    )
-
-    for root in candidate_roots:
-        for pkg in nvidia_pkgs:
-            bin_path = os.path.join(root, "nvidia", pkg, "bin")
-            if os.path.isdir(bin_path):
-                candidate_bins.append(bin_path)
-
-    # De-duplicate while preserving discovery order.
-    candidate_bins = list(dict.fromkeys(candidate_bins))
-    if candidate_bins:
-        # Prepend to %PATH% for ctypes.WinDLL and subprocess compatibility.
-        os.environ["PATH"] = os.pathsep.join(candidate_bins) + os.pathsep + os.environ.get("PATH", "")
-        # os.add_dll_directory() is the official Python >= 3.8 mechanism
-        # for extending the DLL search path on Windows.
-        # Ref: https://docs.python.org/3/library/os.html#os.add_dll_directory
-        if hasattr(os, "add_dll_directory"):
-            for bin_path in candidate_bins:
-                try:
-                    handle = os.add_dll_directory(bin_path)
-                    _cuda_dll_dir_handles.append(handle)  # prevent GC
-                except OSError:
-                    pass
-        logging.info("Injected %s CUDA DLL directories.", len(candidate_bins))
-
-    _cuda_paths_injected = True
-
-
-def _has_cuda() -> bool:
-    """Probe whether CUDA runtime DLLs are loadable.
-
-    On Windows we attempt to load ``cublas64_*.dll`` via ``ctypes.WinDLL``.
-    If the DLL loads successfully, CUDA is available.  On Linux / macOS we
-    optimistically return True and let CTranslate2 handle the fallback.
-    """
-    if os.name != "nt":
-        return True
-
-    # cuBLAS is a reliable indicator — if it loads, CUDA is functional.
-    cublas_candidates = (
-        "cublas64_12.dll",   # CUDA 12.x
-        "cublas64_11.dll",   # CUDA 11.x
-    )
-
-    for dll_name in cublas_candidates:
-        try:
-            ctypes.WinDLL(dll_name)
-            return True
-        except OSError:
-            continue
-
-    return False
 
 
 def _resolve_download_root(download_root: str | None) -> str:
@@ -179,14 +80,6 @@ def _is_local_model_complete(root: str) -> bool:
         return False
 
 
-def _recommended_cpu_threads() -> int:
-    """Pick a practical CPU thread count for faster-whisper."""
-    cores = os.cpu_count() or 4
-    if cores <= 4:
-        return max(1, cores)
-    return min(8, cores - 1)
-
-
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def is_model_loaded() -> bool:
@@ -208,10 +101,13 @@ def get_model(download_root: str | None = None) -> WhisperModel:
 
     Device selection
     ~~~~~~~~~~~~~~~~
-    * **CUDA available** → ``device='auto', compute_type='auto'``
-      (CTranslate2 picks the best GPU precision automatically).
-    * **CPU only** → ``device='cpu', compute_type='int8'``
-      (int8 is ~4× faster than float32 on modern x86 CPUs).
+    Delegated to ``core.gpu_manager.optimal_compute_type()`` which
+    picks the best device and precision for the detected hardware:
+
+    * **CUDA + ≥ 8 GB VRAM** → ``("cuda", "float16")``
+    * **CUDA + 4–8 GB VRAM** → ``("cuda", "int8_float16")``
+    * **CUDA + < 4 GB VRAM** → ``("cuda", "int8")``
+    * **CPU only** → ``("cpu", "int8")``
 
     Raises
     ------
@@ -222,8 +118,8 @@ def get_model(download_root: str | None = None) -> WhisperModel:
     """
     global _model, _model_error
 
-    # Inject CUDA DLL dirs once before anything else tries to load them.
-    _inject_cuda_paths_once()
+    # Configure CUDA DLL paths before anything tries to load them.
+    ensure_cuda_env()
 
     if _model is None:
         with _model_lock:
@@ -248,32 +144,41 @@ def get_model(download_root: str | None = None) -> WhisperModel:
                             f"Expected file: {model_bin}"
                         )
 
-                    # Select device and precision based on CUDA availability.
-                    if _has_cuda():
-                        run_device, run_compute = "auto", "auto"
-                    else:
-                        logging.warning(
-                            "CUDA DLLs not found - forcing CPU/int8 mode. "
-                            "GPU acceleration will be unavailable."
-                        )
-                        run_device, run_compute = "cpu", "int8"
+                    # ── GPU detection and compute-type selection ───────
+                    gpu_info = detect_gpu()
+                    logging.info("Hardware: %s", gpu_info.summary())
+                    run_device, run_compute = optimal_compute_type(gpu_info)
+                    logging.info(
+                        "Model config: device=%s, compute_type=%s",
+                        run_device, run_compute,
+                    )
 
-                    cpu_threads = _recommended_cpu_threads()
+                    cpu_threads = optimal_cpu_threads()
                     logging.info("Using cpu_threads=%s for faster-whisper.", cpu_threads)
 
                     # WhisperModel first arg is model_size_or_path.
                     # When given a local directory path it loads from
                     # disk instead of downloading from Hugging Face.
                     # Ref: https://github.com/SYSTRAN/faster-whisper
+                    # ── Performance tuning ────────────────────────
+                    # num_workers: parallel decoding threads for beam search.
+                    #   On GPU: 1 is optimal (GPU handles parallelism).
+                    #   On CPU: match cpu_threads for throughput.
+                    num_workers = 1 if run_device == "cuda" else cpu_threads
+
                     _model = WhisperModel(
                         model_path,
                         device=run_device,
                         compute_type=run_compute,
                         cpu_threads=cpu_threads,
+                        num_workers=num_workers,
                         download_root=root,
                     )
                     _model_error = None
-                    logging.info("Whisper model loaded successfully.")
+                    logging.info(
+                        "Whisper model loaded successfully on %s (%s).",
+                        run_device, run_compute,
+                    )
                 except Exception as exc:
                     _model_error = str(exc)
                     logging.error("Failed to load model: %s", exc, exc_info=True)

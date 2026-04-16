@@ -2,13 +2,19 @@
 ; LocalScribe — Inno Setup Installer Script
 ; ============================================================================
 ;
-; Prerequisites:
-;   1. Build the app first:  python build.py
+; Prerequisites (must be done IN ORDER):
+;   1. Build the app first:  .\venv\Scripts\python.exe build.py
+;      → this produces dist\LocalScribe\ which is the source for this script.
+;      → dist\ does NOT exist in the repo — you must build before compiling.
 ;   2. Install Inno Setup:   https://jrsoftware.org/isdl.php
 ;   3. Compile this script:  right-click installer.iss → Compile
 ;      Or from CLI:  "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
 ;
-; Output:  dist\LocalScribe_Setup.exe
+; GPU Support:
+;   The installer bundles CTranslate2 with built-in CUDA support.
+;   NVIDIA GPUs are auto-detected at runtime; no separate CUDA toolkit required.
+;
+; Output:  dist\Installer\LocalScribe_Setup.exe
 ; ============================================================================
 
 #define MyAppName      "LocalScribe"
@@ -31,7 +37,9 @@ AppSupportURL={#MyAppURL}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
-OutputDir=dist
+; Installer .exe goes into its own subfolder so it is never confused
+; with the PyInstaller app bundle at dist\LocalScribe\.
+OutputDir=dist\Installer
 OutputBaseFilename=LocalScribe_Setup
 SetupIconFile=image\LocalScribe.ico
 Compression=lzma2
@@ -52,6 +60,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; Bundle the entire PyInstaller --onedir output into the install directory.
 ; This includes the exe, _internal/ (with bundled Python + data files),
 ; and all compiled .pyc / .pyd dependencies.
+;
+; IMPORTANT: dist\LocalScribe\ must exist before compiling this script.
+; Run:  .\venv\Scripts\python.exe build.py
 Source: "dist\LocalScribe\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Dirs]

@@ -26,6 +26,7 @@ that must exist for the model to be considered “ready”.
 import json
 import logging
 import os
+import re
 import shutil
 import socket
 import time
@@ -49,8 +50,12 @@ _SETUP_STATE_FILE = "setup_state.json"
 _MIN_MODEL_BIN_BYTES = 1_000_000_000
 
 # Hugging Face Hub timeout/retry tuning for slow or unstable connections.
-_DOWNLOAD_RETRIES = 3
-_DOWNLOAD_RETRY_BACKOFF_SECONDS = 2.0
+_DOWNLOAD_RETRIES = 5
+_DOWNLOAD_RETRY_BACKOFF_SECONDS = 3.0
+
+# Maximum seconds to wait on a single 429 Retry-After before giving up.
+# Prevents the app from hanging for minutes on heavily throttled connections.
+_MAX_RATE_LIMIT_WAIT = 90
 
 
 def _load_manifest() -> dict:
@@ -146,6 +151,7 @@ class SetupWorker(QObject):
     status_update = Signal(str)
     log_update = Signal(str)
     progress = Signal(int)
+    file_status = Signal(str)
     finished = Signal(bool, str)
 
     def __init__(self):
@@ -173,12 +179,50 @@ class SetupWorker(QObject):
             shutil.rmtree(local_dir, ignore_errors=True)
             self._log(f"Removed partial download folder: {local_dir}")
 
+    # ── Error classification helpers ──────────────────────────────────────
+
     def _is_timeout_error(self, exc: Exception) -> bool:
         """Best-effort timeout detection across requests/httpx/socket stacks."""
-        if isinstance(exc, TimeoutError | socket.timeout):
+        if isinstance(exc, (TimeoutError, socket.timeout)):
             return True
         text = str(exc).lower()
         return "timed out" in text or "timeout" in text
+
+    def _is_rate_limit_error(self, exc: Exception) -> bool:
+        """Detect HTTP 429 Too Many Requests from huggingface_hub exceptions."""
+        text = str(exc)
+        # huggingface_hub raises HTTPError / RepositoryNotFoundError with
+        # the status code embedded in the message string.
+        return "429" in text or "too many requests" in text.lower()
+
+    def _parse_retry_after(self, exc: Exception) -> float:
+        """Extract Retry-After seconds from a 429 exception message.
+
+        huggingface_hub embeds the server response body in the exception
+        string.  We look for any numeric value following "retry-after",
+        "retry after", or "wait" keywords.  Falls back to
+        ``_DOWNLOAD_RETRY_BACKOFF_SECONDS`` if nothing is found.
+
+        Security note: we only read the number — no URLs, headers, or
+        other server-provided content are used or stored.
+        """
+        text = str(exc).lower()
+        patterns = [
+            r"retry[- ]after[:\s]+(\d+)",
+            r"wait[\s:]+(\d+)\s*s",
+            r"\bafter\s+(\d+)\s*second",
+        ]
+        for pat in patterns:
+            m = re.search(pat, text)
+            if m:
+                return min(float(m.group(1)), _MAX_RATE_LIMIT_WAIT)
+        return _DOWNLOAD_RETRY_BACKOFF_SECONDS
+
+    def _retryable(self, exc: Exception) -> bool:
+        """True if the error is transient and worth retrying."""
+        return self._is_timeout_error(exc) or self._is_rate_limit_error(exc)
+
+    # ── Download with smart retry ──────────────────────────────────────────
 
     def _download_file_with_retry(
         self,
@@ -188,7 +232,24 @@ class SetupWorker(QObject):
         revision: str,
         local_dir: Path,
     ) -> str:
-        """Download a single repo file with timeout-aware retries."""
+        """Download a single repo file with 429-aware and timeout-aware retries.
+
+        Retry strategy
+        --------------
+        * **Rate-limited (429)** — reads the ``Retry-After`` value from the
+          exception message and waits exactly that long (capped at
+          ``_MAX_RATE_LIMIT_WAIT`` seconds) before retrying.  The UI shows
+          a countdown message so the user knows the app is not frozen.
+        * **Timeout** — exponential backoff (``_DOWNLOAD_RETRY_BACKOFF_SECONDS
+          × attempt``).
+        * **Other errors** — re-raised immediately; no retry.
+
+        Security
+        --------
+        No credentials, tokens, or user-identifiable data are read, stored,
+        or transmitted.  Only the numeric wait value from the server response
+        is consumed.
+        """
         last_exc: Exception | None = None
         for attempt in range(1, _DOWNLOAD_RETRIES + 1):
             self._check_cancel()
@@ -201,20 +262,38 @@ class SetupWorker(QObject):
                 )
             except Exception as exc:
                 last_exc = exc
-                if not self._is_timeout_error(exc) or attempt >= _DOWNLOAD_RETRIES:
+
+                if not self._retryable(exc) or attempt >= _DOWNLOAD_RETRIES:
                     raise
 
-                wait_for = _DOWNLOAD_RETRY_BACKOFF_SECONDS * attempt
-                self._log(
-                    f"Network timeout while downloading model data. "
-                    f"Retrying ({attempt}/{_DOWNLOAD_RETRIES}) in {wait_for:.0f}s..."
-                )
-                self.status_update.emit(
-                    f"Connection is slow. Retrying download ({attempt}/{_DOWNLOAD_RETRIES})..."
-                )
-                time.sleep(wait_for)
+                if self._is_rate_limit_error(exc):
+                    wait_for = self._parse_retry_after(exc)
+                    self._log(
+                        f"Hugging Face rate limit reached. "
+                        f"Waiting {wait_for:.0f}s before retrying "
+                        f"({attempt}/{_DOWNLOAD_RETRIES})..."
+                    )
+                    # Countdown in the UI so users don't think it's frozen
+                    for remaining in range(int(wait_for), 0, -1):
+                        self._check_cancel()
+                        self.status_update.emit(
+                            f"Rate limited — resuming in {remaining}s "
+                            f"({attempt}/{_DOWNLOAD_RETRIES} retries used)"
+                        )
+                        time.sleep(1)
+                else:
+                    wait_for = _DOWNLOAD_RETRY_BACKOFF_SECONDS * attempt
+                    self._log(
+                        f"Network timeout on '{filename}'. "
+                        f"Retrying ({attempt}/{_DOWNLOAD_RETRIES}) in {wait_for:.0f}s..."
+                    )
+                    self.status_update.emit(
+                        f"Slow connection — retrying in {wait_for:.0f}s "
+                        f"({attempt}/{_DOWNLOAD_RETRIES})"
+                    )
+                    time.sleep(wait_for)
 
-        raise RuntimeError(str(last_exc) if last_exc else "Download failed.")
+        raise RuntimeError(str(last_exc) if last_exc else "Download failed after retries.")
 
     def _download_repo_with_progress(self, repo_id: str, local_dir: Path) -> None:
         """Download every file in a Hugging Face model repo with progress.
@@ -240,6 +319,14 @@ class SetupWorker(QObject):
         # These env vars are respected by huggingface_hub.
         os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
         os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "30")
+        os.environ.setdefault("HF_HUB_ENABLE_HF_XET", "1")
+
+        # Optional visibility: let users know accelerated backend is available.
+        try:
+            import hf_xet  # noqa: F401
+            self._log("HF transfer backend: hf_xet enabled (accelerated).")
+        except Exception:
+            self._log("HF transfer backend: standard HTTP (hf_xet not available).")
 
         # Collect all files in the repo except .gitattributes (not useful).
         siblings = [
@@ -257,10 +344,7 @@ class SetupWorker(QObject):
         if total_bytes > 0:
             self._log(f"Planned download size: {_format_bytes(total_bytes)}")
 
-        if total_bytes > 0:
-            self.progress.emit(0)
-        else:
-            self.progress.emit(-1)
+        self.progress.emit(0)
 
         for idx, sibling in enumerate(siblings, start=1):
             self._check_cancel()
@@ -269,7 +353,9 @@ class SetupWorker(QObject):
                 current_pct = int(min(100, (downloaded_bytes * 100) / total_bytes))
                 self.status_update.emit(f"Downloading Whisper model... {current_pct}%")
             else:
-                self.status_update.emit("Downloading Whisper model files...")
+                current_pct = int(min(100, ((idx - 1) * 100) / len(siblings)))
+                self.status_update.emit(f"Downloading Whisper model... {current_pct}%")
+            self.file_status.emit(f"File {idx}/{len(siblings)}: {filename}")
 
             local_path = self._download_file_with_retry(
                 repo_id=repo_id,
@@ -289,11 +375,15 @@ class SetupWorker(QObject):
                 pct = int(min(100, (downloaded_bytes * 100) / total_bytes))
                 self.progress.emit(pct)
                 self.status_update.emit(f"Downloading Whisper model... {pct}%")
+            else:
+                pct = int(min(100, (idx * 100) / len(siblings)))
+                self.progress.emit(pct)
+                self.status_update.emit(f"Downloading Whisper model... {pct}%")
 
             elapsed_total = max(time.time() - started_all, 0.001)
             avg_speed = downloaded_bytes / elapsed_total
             self._log(
-                f"Progress: {int(min(100, (downloaded_bytes * 100) / total_bytes)) if total_bytes > 0 else 0}% "
+                f"Progress: {int(min(100, (downloaded_bytes * 100) / total_bytes)) if total_bytes > 0 else int(min(100, (idx * 100) / len(siblings)))}% "
                 f"({idx}/{len(siblings)} files) | "
                 f"Avg: {_format_speed(avg_speed)}"
             )

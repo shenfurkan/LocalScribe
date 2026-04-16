@@ -48,6 +48,7 @@ REQUIRED_IMPORTS = [
     "fpdf",
     "argostranslate",
     "huggingface_hub",
+    "hf_xet",
 ]
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -129,6 +130,30 @@ def _runtime_asset_check() -> None:
         print(f"[ERROR] Could not validate faster_whisper assets: {exc}")
         sys.exit(1)
 
+    # Verify CTranslate2 CUDA DLLs are present so GPU works in packaged app
+    try:
+        import ctranslate2
+        ct2_dir = Path(ctranslate2.package_dir)
+        cuda_dlls = [f for f in ct2_dir.iterdir() if f.suffix == ".dll" and f.name != "libiomp5md.dll"]
+        if cuda_dlls:
+            print(f"Preflight: CTranslate2 DLLs found ({len(cuda_dlls)}): {', '.join(f.name for f in cuda_dlls)}")
+        else:
+            print("[WARNING] No CTranslate2 CUDA DLLs found — GPU acceleration may not work in packaged app.")
+        gpu_count = ctranslate2.get_cuda_device_count()
+        print(f"Preflight: CTranslate2 reports {gpu_count} CUDA device(s).")
+    except Exception as exc:
+        print(f"[WARNING] Could not validate CTranslate2 CUDA status: {exc}")
+
+    # Verify hf_xet is available for accelerated Hugging Face downloads.
+    try:
+        import hf_xet  # noqa: F401
+        print("Preflight: hf_xet available (accelerated HF downloads enabled).")
+    except Exception as exc:
+        print(
+            "[WARNING] hf_xet is not available; downloads will use standard HTTP. "
+            f"Details: {exc}"
+        )
+
     print("Preflight: runtime asset checks passed.")
 
 
@@ -176,6 +201,8 @@ def build(check_only: bool = False):
         "--add-data", f"core{os.pathsep}core",
         "--add-data", f"ui{os.pathsep}ui",
         "--collect-data", "faster_whisper",
+        "--collect-data", "ctranslate2",
+        "--collect-binaries", "ctranslate2",
     ]
 
     cmd.append("main.py")
