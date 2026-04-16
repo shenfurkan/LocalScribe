@@ -32,6 +32,8 @@ import socket
 import time
 from pathlib import Path
 
+import threading
+
 from PySide6.QtCore import QObject, Signal
 from huggingface_hub import HfApi, hf_hub_download
 
@@ -296,10 +298,21 @@ class SetupWorker(QObject):
         raise RuntimeError(str(last_exc) if last_exc else "Download failed after retries.")
 
     def _download_repo_with_progress(self, repo_id: str, local_dir: Path) -> None:
-        """Download every file in a Hugging Face model repo with progress.
+        """Download every file in a Hugging Face model repo with live progress.
 
-        Uses ``hf_hub_download()`` per-file (instead of ``snapshot_download``)
-        so we can report per-file and aggregate progress to the UI.
+        Progress tracking
+        -----------------
+        ``hf_xet`` (the accelerated backend) bypasses tqdm entirely — it
+        downloads chunks into its own content-addressed cache and only hands
+        the assembled file to the HF layer when the transfer is complete.
+        A ``tqdm_class`` hook therefore receives at most one large
+        ``update(n)`` call per file, making the bar appear frozen then jump.
+
+        Instead, a lightweight daemon thread polls the directories where the
+        active download backend writes its data — ``local_dir``, the HF hub
+        model cache, and the xet chunk cache — every 0.75 s.  The aggregate
+        byte count minus the pre-download baseline gives a smooth, real-time
+        progress value that works regardless of which backend is in use.
 
         Parameters
         ----------
@@ -307,9 +320,7 @@ class SetupWorker(QObject):
             Hugging Face repo identifier, e.g. ``Systran/faster-whisper-large-v3``.
         local_dir : Path
             Target directory.  ``hf_hub_download(local_dir=...)`` preserves the
-            repo’s file structure under this path.  A ``.cache/huggingface/``
-            metadata folder is created automatically to avoid redundant
-            re-downloads.
+            repo's file structure under this path.
         """
         api = HfApi()
         info = api.model_info(repo_id)
@@ -337,57 +348,107 @@ class SetupWorker(QObject):
             raise RuntimeError(f"No files found in model repository: {repo_id}")
 
         total_bytes = sum((getattr(s, "size", 0) or 0) for s in siblings)
-        downloaded_bytes = 0
+        total_files = len(siblings)
         started_all = time.time()
 
         self._log(f"Repository: https://huggingface.co/{repo_id}")
         if total_bytes > 0:
             self._log(f"Planned download size: {_format_bytes(total_bytes)}")
 
+        # ── Disk-polling progress tracker ─────────────────────────────────
+        # Resolve every directory where the active download backend may write
+        # its intermediate data.  We scan all three so that:
+        #   • local_dir       — final destination (copied here after download)
+        #   • hub_model_cache — HF hub blob store (staging for hf_hub_download)
+        #   • xet_cache       — hf_xet chunk cache (grows as model.bin streams)
+        hf_home = Path(
+            os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface")
+        )
+        hub_model_cache = (
+            hf_home / "hub" / ("models--" + repo_id.replace("/", "--"))
+        )
+        xet_cache = Path(
+            os.environ.get("HF_XET_CACHE", hf_home / "xet")
+        )
+        _poll_dirs = [local_dir, hub_model_cache, xet_cache]
+
+        def _dir_bytes(path: Path) -> int:
+            """Sum sizes of all files under *path* using os.walk (fast on Windows)."""
+            total = 0
+            try:
+                for root, _, fnames in os.walk(path):
+                    for fname in fnames:
+                        try:
+                            total += os.path.getsize(os.path.join(root, fname))
+                        except OSError:
+                            pass
+            except OSError:
+                pass
+            return total
+
+        # Record how many bytes are already on disk so that files from a
+        # previous (partial) run do not inflate the reported progress.
+        _baseline = sum(_dir_bytes(d) for d in _poll_dirs)
+
+        _stop_poll = threading.Event()
+
+        def _poll_progress() -> None:
+            """Runs on a daemon thread; emits progress signals every 0.75 s."""
+            while not _stop_poll.wait(0.75):
+                on_disk = sum(_dir_bytes(d) for d in _poll_dirs)
+                new_bytes = max(0, on_disk - _baseline)
+                if total_bytes > 0:
+                    # Cap at 99 — 100 is only emitted by _on_finished after
+                    # post-download validation passes.
+                    pct = int(min(99, (new_bytes * 100) / total_bytes))
+                else:
+                    pct = 0
+                self.progress.emit(pct)
+                self.status_update.emit(f"Downloading Whisper model... {pct}%")
+
+        _poll_thread = threading.Thread(
+            target=_poll_progress, daemon=True, name="ls-progress-poll"
+        )
+        _poll_thread.start()
+
         self.progress.emit(0)
+        self.status_update.emit("Downloading Whisper model... 0%")
 
-        for idx, sibling in enumerate(siblings, start=1):
-            self._check_cancel()
-            filename = sibling.rfilename
-            if total_bytes > 0:
-                current_pct = int(min(100, (downloaded_bytes * 100) / total_bytes))
-                self.status_update.emit(f"Downloading Whisper model... {current_pct}%")
-            else:
-                current_pct = int(min(100, ((idx - 1) * 100) / len(siblings)))
-                self.status_update.emit(f"Downloading Whisper model... {current_pct}%")
-            self.file_status.emit(f"File {idx}/{len(siblings)}: {filename}")
+        bytes_committed = 0  # bytes from fully-completed files (for speed log)
+        try:
+            for idx, sibling in enumerate(siblings, start=1):
+                self._check_cancel()
+                filename = sibling.rfilename
+                self.file_status.emit(f"File {idx}/{total_files}: {filename}")
 
-            local_path = self._download_file_with_retry(
-                repo_id=repo_id,
-                filename=filename,
-                revision=revision,
-                local_dir=local_dir,
-            )
-            local_path_obj = Path(local_path)
-            file_size = (
-                local_path_obj.stat().st_size
-                if local_path_obj.exists()
-                else (getattr(sibling, "size", 0) or 0)
-            )
-            downloaded_bytes += file_size
+                local_path = self._download_file_with_retry(
+                    repo_id=repo_id,
+                    filename=filename,
+                    revision=revision,
+                    local_dir=local_dir,
+                )
 
-            if total_bytes > 0:
-                pct = int(min(100, (downloaded_bytes * 100) / total_bytes))
-                self.progress.emit(pct)
-                self.status_update.emit(f"Downloading Whisper model... {pct}%")
-            else:
-                pct = int(min(100, (idx * 100) / len(siblings)))
-                self.progress.emit(pct)
-                self.status_update.emit(f"Downloading Whisper model... {pct}%")
+                local_path_obj = Path(local_path)
+                file_size = (
+                    local_path_obj.stat().st_size
+                    if local_path_obj.exists()
+                    else (getattr(sibling, "size", 0) or 0)
+                )
+                bytes_committed += file_size
 
-            elapsed_total = max(time.time() - started_all, 0.001)
-            avg_speed = downloaded_bytes / elapsed_total
-            self._log(
-                f"Progress: {int(min(100, (downloaded_bytes * 100) / total_bytes)) if total_bytes > 0 else int(min(100, (idx * 100) / len(siblings)))}% "
-                f"({idx}/{len(siblings)} files) | "
-                f"Avg: {_format_speed(avg_speed)}"
-            )
-            self._check_cancel()
+                elapsed_total = max(time.time() - started_all, 0.001)
+                avg_speed = bytes_committed / elapsed_total
+                self._log(
+                    f"File {idx}/{total_files} complete: {filename} | "
+                    f"Avg: {_format_speed(avg_speed)}"
+                )
+                self._check_cancel()
+        finally:
+            # Always stop the polling thread, even if download fails.
+            _stop_poll.set()
+            _poll_thread.join(timeout=3)
+
+
 
     def run(self):
         try:

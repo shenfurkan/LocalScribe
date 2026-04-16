@@ -58,14 +58,9 @@ QDialog#SetupDialog {
 #HardwareCard {
     background-color: #FFFFFF;
     border: 1px solid #E2E8F0;
+    border-left: 3px solid #0EA5E9;
     border-radius: 8px;
     padding: 10px 14px;
-}
-
-#HardwareIcon {
-    font-size: 13pt;
-    color: #0EA5E9;
-    background-color: transparent;
 }
 
 #HardwareLabel {
@@ -222,13 +217,7 @@ class SetupDialog(QDialog):
         hw_card.setObjectName("HardwareCard")
         hw_layout = QHBoxLayout(hw_card)
         hw_layout.setContentsMargins(14, 10, 14, 10)
-        hw_layout.setSpacing(14)
-
-        hw_icon = QLabel("\u26A1")
-        hw_icon.setObjectName("HardwareIcon")
-        hw_icon.setFixedWidth(32)
-        hw_icon.setAlignment(Qt.AlignCenter)
-        hw_layout.addWidget(hw_icon)
+        hw_layout.setSpacing(10)
 
         hw_text_layout = QVBoxLayout()
         hw_text_layout.setSpacing(2)
@@ -434,7 +423,7 @@ class SetupDialog(QDialog):
             self._close_btn.setText("Continue")
             self._close_btn.setObjectName("ContinueBtn")
             self._close_btn.setStyle(self._close_btn.style())
-            self._log_view.append("\n\u2714 Setup completed successfully.")
+            self._log_view.append("\nSetup completed successfully.")
         else:
             self._status_label.setText("Setup failed")
             self._status_label.setStyleSheet(
@@ -450,7 +439,7 @@ class SetupDialog(QDialog):
             self._percent_label.setText("0%")
             self._progress_meta_label.setText("0% complete • 100% remaining")
             self._close_btn.setText("Close")
-            self._log_view.append(f"\n\u2718 Setup failed: {error_msg}")
+            self._log_view.append(f"\nSetup failed: {error_msg}")
 
         # CRITICAL: always re-enable the button.  If the user cancelled
         # (which disabled the button), they need a way out.
