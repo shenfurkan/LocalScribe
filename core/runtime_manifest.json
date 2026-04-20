@@ -1,8 +1,60 @@
 {
-    "whisper_model": {
-        "repo_id": "Systran/faster-whisper-large-v3",
-        "local_dir_name": "large-v3-local",
-        "expected_file": "model.bin",
-        "description": "Whisper large-v3 speech recognition model (~3 GB)"
-    }
+    "default_model_id": "large-v3",
+    "whisper_models": [
+        {
+            "id": "tiny",
+            "display_name": "Whisper Tiny",
+            "tier": "Fastest",
+            "approx_size_mb": 75,
+            "min_bin_size_bytes": 30000000,
+            "repo_id": "Systran/faster-whisper-tiny",
+            "local_dir_name": "tiny-local",
+            "expected_file": "model.bin",
+            "description": "Lowest accuracy. Great for quick tests and very low-end hardware."
+        },
+        {
+            "id": "base",
+            "display_name": "Whisper Base",
+            "tier": "Fast",
+            "approx_size_mb": 142,
+            "min_bin_size_bytes": 80000000,
+            "repo_id": "Systran/faster-whisper-base",
+            "local_dir_name": "base-local",
+            "expected_file": "model.bin",
+            "description": "Better accuracy than Tiny. Good for short clips and dev loops."
+        },
+        {
+            "id": "small",
+            "display_name": "Whisper Small",
+            "tier": "Balanced",
+            "approx_size_mb": 488,
+            "min_bin_size_bytes": 280000000,
+            "repo_id": "Systran/faster-whisper-small",
+            "local_dir_name": "small-local",
+            "expected_file": "model.bin",
+            "description": "Solid quality with modest resource use. Fine for most meetings."
+        },
+        {
+            "id": "medium",
+            "display_name": "Whisper Medium",
+            "tier": "High quality",
+            "approx_size_mb": 1500,
+            "min_bin_size_bytes": 900000000,
+            "repo_id": "Systran/faster-whisper-medium",
+            "local_dir_name": "medium-local",
+            "expected_file": "model.bin",
+            "description": "Strong multilingual accuracy. Needs a capable CPU or GPU."
+        },
+        {
+            "id": "large-v3",
+            "display_name": "Whisper Large-v3",
+            "tier": "Best quality",
+            "approx_size_mb": 3000,
+            "min_bin_size_bytes": 1000000000,
+            "repo_id": "Systran/faster-whisper-large-v3",
+            "local_dir_name": "large-v3-local",
+            "expected_file": "model.bin",
+            "description": "Highest accuracy. Recommended for production transcripts."
+        }
+    ]
 }

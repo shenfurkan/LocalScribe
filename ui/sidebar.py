@@ -12,12 +12,13 @@ class Sidebar(QWidget):
     file_selected = Signal(str)        # transcript_id
     upload_requested = Signal()
     theme_toggled = Signal()
+    gpu_settings_requested = Signal()
 
     def __init__(self, storage: StorageManager):
         super().__init__()
         self.storage = storage
         self.setObjectName("Sidebar")
-        self.setFixedWidth(240)
+        self.setFixedWidth(252)
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -33,8 +34,13 @@ class Sidebar(QWidget):
         # Upload button
         upload_btn = QPushButton("＋  New Transcription")
         upload_btn.setObjectName("UploadBtn")
+        upload_btn.setCursor(Qt.PointingHandCursor)
         upload_btn.clicked.connect(self.upload_requested)
         layout.addWidget(upload_btn)
+
+        self.section_label = QLabel("Recent Transcripts")
+        self.section_label.setObjectName("SidebarSectionLabel")
+        layout.addWidget(self.section_label)
         
         # Scrollable file list
         scroll = QScrollArea()
@@ -45,8 +51,8 @@ class Sidebar(QWidget):
         
         self.list_container = QWidget()
         self.list_layout = QVBoxLayout(self.list_container)
-        self.list_layout.setContentsMargins(8, 8, 8, 8)
-        self.list_layout.setSpacing(4)
+        self.list_layout.setContentsMargins(10, 8, 10, 10)
+        self.list_layout.setSpacing(6)
         self.list_layout.addStretch()
         
         scroll.setWidget(self.list_container)
@@ -54,18 +60,26 @@ class Sidebar(QWidget):
         
         # Status Label
         self.status_label = QLabel("")
-        self.status_label.setObjectName("CardMeta") # reuse a subtle text style
+        self.status_label.setObjectName("SidebarStatus")
         self.status_label.setWordWrap(True)
 
         # Theme toggle button at bottom
-        self.theme_btn = QPushButton("🌗 Toggle Theme")
-        self.theme_btn.setObjectName("ActionBtn")
+        self.theme_btn = QPushButton("🌗  Appearance")
+        self.theme_btn.setObjectName("SidebarThemeBtn")
+        self.theme_btn.setCursor(Qt.PointingHandCursor)
         self.theme_btn.clicked.connect(self.theme_toggled.emit)
         
+        # GPU settings button
+        self.gpu_btn = QPushButton("🖥  GPU Acceleration")
+        self.gpu_btn.setObjectName("SidebarThemeBtn")
+        self.gpu_btn.setCursor(Qt.PointingHandCursor)
+        self.gpu_btn.clicked.connect(self.gpu_settings_requested.emit)
+
         # Add to layout with some margin
         bottom_layout = QVBoxLayout()
         bottom_layout.setContentsMargins(12, 12, 12, 12)
         bottom_layout.addWidget(self.status_label)
+        bottom_layout.addWidget(self.gpu_btn)
         bottom_layout.addWidget(self.theme_btn)
         layout.addLayout(bottom_layout)
         
@@ -104,8 +118,16 @@ class Sidebar(QWidget):
             item = self.list_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        
+
         transcripts = self.storage.load_all()
+        if not transcripts:
+            empty = QLabel("No transcripts yet.\nClick New Transcription to get started.")
+            empty.setObjectName("SidebarEmptyState")
+            empty.setAlignment(Qt.AlignCenter)
+            empty.setWordWrap(True)
+            self.list_layout.insertWidget(self.list_layout.count() - 1, empty)
+            return
+
         for t in transcripts:
             card = TranscriptCard(t)
             card.clicked.connect(lambda _id=t["id"]: self.file_selected.emit(_id))

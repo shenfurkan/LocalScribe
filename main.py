@@ -32,12 +32,49 @@ import logging
 # executable lives next to the ``_internal/`` data directory.  In dev
 # mode the script's own directory is the project root.
 # ---------------------------------------------------------------------------
-if getattr(sys, "frozen", False):
-    _ROOT = os.path.dirname(sys.executable)
-else:
-    _ROOT = os.path.dirname(os.path.abspath(__file__))
+def setup_logging():
+    """Configure logging with appropriate handlers for dev vs compiled builds."""
+    log_level = logging.INFO
+    log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    
+    # Clear any existing handlers
+    logging.getLogger().handlers.clear()
+    
+    # Create formatter
+    formatter = logging.Formatter(log_format)
+    
+    # Console handler (dev only). In PyInstaller --windowed mode, stdout/stderr
+    # may be None, so avoid attaching a console stream there.
+    if not getattr(sys, 'frozen', False):
+        console_handler = logging.StreamHandler(sys.stderr if sys.stderr is not None else sys.stdout)
+        console_handler.setLevel(log_level)
+        console_handler.setFormatter(formatter)
+        logging.getLogger().addHandler(console_handler)
+    
+    # File handler for compiled builds (write to user data directory)
+    if getattr(sys, 'frozen', False):
+        try:
+            from core.paths import data_root
+            log_file = data_root() / "LocalScribe.log"
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setLevel(log_level)
+            file_handler.setFormatter(formatter)
+            logging.getLogger().addHandler(file_handler)
+            logging.info("Logging to file: %s", log_file)
+        except Exception as e:
+            # If we can't set up file logging, at least log to console
+            logging.warning("Could not set up file logging: %s", e)
+    
+    logging.getLogger().setLevel(log_level)
+    logging.info("Logging configured. Frozen: %s, Root: %s", getattr(sys, 'frozen', False), _ROOT)
+
+# Add the project root to sys.path so imports work from any entry point.
+_ROOT = os.path.abspath(os.path.dirname(__file__))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
+
+# Setup logging early (after _ROOT is defined)
+setup_logging()
 
 # Set the working directory so relative paths like "assets/dark_theme.qss"
 # or "image/LocalScribe.ico" resolve regardless of how the app was launched.
@@ -78,11 +115,33 @@ os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 # If hf_xet is not installed, huggingface_hub transparently falls back.
 os.environ.setdefault("HF_HUB_ENABLE_HF_XET", "1")
 
-from PySide6.QtWidgets import QApplication
-from PySide6.QtGui import QFont, QIcon
-from core.setup_manager import is_model_ready
-from ui.setup_dialog import SetupDialog
-from ui.main_window import MainWindow
+from PySide6.QtWidgets import QApplication, QSplashScreen
+from PySide6.QtGui import QFont, QIcon, QPixmap, QColor, QPainter
+from PySide6.QtCore import Qt
+
+
+def _make_splash(app):
+    """Create and show a minimal splash screen using only Qt primitives.
+    This appears immediately before any heavy ML imports begin."""
+    w, h = 480, 200
+    px = QPixmap(w, h)
+    px.fill(QColor("#0f172a"))
+    painter = QPainter(px)
+    painter.setPen(QColor("#f8fafc"))
+    font_title = QFont("Segoe UI", 22, QFont.Bold)
+    painter.setFont(font_title)
+    painter.drawText(0, 0, w, h - 40, Qt.AlignCenter, "LocalScribe")
+    painter.setPen(QColor("#0ea5e9"))
+    painter.drawRect(80, h // 2 + 10, w - 160, 2)
+    painter.setPen(QColor("#94a3b8"))
+    font_sub = QFont("Segoe UI", 10)
+    painter.setFont(font_sub)
+    painter.drawText(0, h // 2 + 22, w, 30, Qt.AlignCenter, "Loading AI Engine...")
+    painter.end()
+    splash = QSplashScreen(px, Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
+    splash.show()
+    app.processEvents()
+    return splash
 
 
 def main():
@@ -92,31 +151,76 @@ def main():
     app.setApplicationName("LocalScribe")
     app.setOrganizationName("LocalScribe")
 
-    # Apply the native Windows "Segoe UI" font for a polished look.
     font = QFont("Segoe UI", 10)
     app.setFont(font)
-    app.setWindowIcon(QIcon(os.path.join(_ROOT, "image", "LocalScribe.ico")))
+    from core.paths import app_bundle_dir
+    icon_path = os.path.join(str(app_bundle_dir()), "image", "LocalScribe.ico")
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
+        logging.info("Application icon loaded from: %s", icon_path)
+    else:
+        logging.warning("Application icon not found at: %s", icon_path)
+
+    # Show splash immediately — before any heavy ML imports below.
+    splash = _make_splash(app)
+
+    # Heavy imports deferred to here so the splash renders first.
+    from core.setup_manager import (
+        adopt_legacy_model_if_needed,
+        find_ready_model_id,
+        get_default_model_id,
+        get_active_model_id,
+        is_model_ready,
+        set_active_model_id,
+    )
+    from ui.setup_dialog import SetupDialog
+    from ui.main_window import MainWindow
 
     # ------------------------------------------------------------------
-    # FIRST-RUN GATE — ensure the Whisper model is present on disk.
-    # is_model_ready() reads core/runtime_manifest.json, resolves the
-    # expected model path via core/paths.models_dir(), and checks that
-    # the binary exists and is >= 1 GB (guards against partial downloads).
+    # FIRST-RUN GATE — ensure a model is selected AND present on disk.
+    #
+    # We show the setup wizard (token → picker → download) whenever:
+    #   * no active model id has been persisted in setup_state.json, or
+    #   * the selected model is missing / incomplete on disk.
+    #
+    # This guarantees fresh installs always see the model picker, even
+    # if a previous models/ folder is present. Users can then click
+    # "Use this model" on an already-installed model without paying
+    # for a re-download.
     #
     # The try/except guarantees that ANY failure (missing manifest, bad
     # path, permission error, etc.) falls through to the setup dialog
     # rather than crashing the app.
     # ------------------------------------------------------------------
     try:
-        model_ready = is_model_ready()
-    except Exception as exc:
-        logging.warning("is_model_ready() failed — forcing setup: %s", exc)
-        model_ready = False
+        active = get_active_model_id()
 
-    if not model_ready:
-        # Show the blocking setup dialog that downloads the model.
-        # SetupDialog.exec() returns only when the user clicks Continue
-        # (success) or Close (failure / cancel).
+        # If no active model is recorded yet, try to adopt a previously-downloaded
+        # model from legacy/local folders and activate any ready model found.
+        if not active:
+            adopt_legacy_model_if_needed(get_default_model_id())
+            ready = find_ready_model_id()
+            if ready:
+                set_active_model_id(ready)
+                active = ready
+
+        # If an active id exists but is missing in the runtime model store,
+        # attempt legacy-path adoption once before showing setup.
+        if active and not is_model_ready(active):
+            adopt_legacy_model_if_needed(active)
+
+        needs_setup = (not active) or (not is_model_ready(active))
+    except Exception as exc:
+        logging.warning("Setup gate check failed — forcing setup: %s", exc)
+        needs_setup = True
+
+    if needs_setup:
+        # Hide the splash screen so it never overlaps the setup wizard.
+        splash.hide()
+        splash.close()
+        splash._already_closed = True
+        app.processEvents()
+
         dlg = SetupDialog()
         dlg.exec()
         if not dlg.setup_succeeded:
@@ -126,7 +230,8 @@ def main():
     # something went wrong (e.g. disk full, antivirus quarantine).  Show
     # a clear error instead of letting the main window open broken.
     try:
-        if not is_model_ready():
+        active_model = get_active_model_id()
+        if not active_model or not is_model_ready(active_model):
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.critical(
                 None,
@@ -141,11 +246,13 @@ def main():
         pass
 
     # ------------------------------------------------------------------
-    # LAUNCH — MainWindow starts a background thread to pre-load the
-    # model into RAM so the first transcription starts instantly.
+    # LAUNCH — close splash, show MainWindow.
     # ------------------------------------------------------------------
     window = MainWindow()
+    window.setWindowIcon(app.windowIcon())
     window.show()
+    if not getattr(splash, '_already_closed', False):
+        splash.finish(window)
 
     sys.exit(app.exec())
 

@@ -172,14 +172,4 @@ class StorageManager:
             data["name"] = new_name
             self.save(data)
 
-    def save_translation(
-        self, transcript_id: str, lang_code: str, segments: list
-    ) -> None:
-        """Add or replace a translated version inside an existing transcript."""
-        data = self.load(transcript_id)
-        if data:
-            data.setdefault("translated_versions", {})[lang_code] = {
-                "created_at": datetime.now().isoformat(),
-                "segments":   segments,
-            }
-            self.save(data)
+

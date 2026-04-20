@@ -29,7 +29,7 @@ noise, or quiet speakers).
 
 import logging
 from PySide6.QtCore import QObject, Signal
-from core.model_manager import get_model
+from core.model_manager import get_model, unload_model
 
 
 # ---------------------------------------------------------------------------
@@ -167,12 +167,29 @@ class TranscriptionWorker(QObject):
             kwargs["initial_prompt"] = self.initial_prompt
         return kwargs
 
-    def _is_missing_vad_asset_error(self, exc: Exception) -> bool:
-        """Detect missing Silero VAD asset errors in packaged environments."""
+    @staticmethod
+    def _is_cuda_runtime_error(exc: Exception) -> bool:
+        """Detect CUDA/DLL runtime failures that can be recovered by switching to CPU."""
+        text = str(exc).lower()
+        needles = ("dll", "cublas", "cudnn", "cuda", "load library",
+                   "could not load", "error 126", "error 127")
+        return any(n in text for n in needles)
+
+    def _is_vad_unavailable_error(self, exc: Exception) -> bool:
+        """Detect recoverable VAD availability errors.
+
+        We can safely retry with ``no_vad`` when either:
+        - packaged Silero VAD asset is missing, or
+        - optional ``onnxruntime`` dependency is not installed.
+        """
         text = str(exc).lower()
         return (
             "silero_vad_v6.onnx" in text
             or ("no_suchfile" in text and "vad" in text)
+            or (
+                "vad filter requires the onnxruntime package" in text
+                or ("onnxruntime" in text and "requires" in text and "vad" in text)
+            )
         )
 
     def _should_attempt_tail_recovery(
@@ -241,9 +258,19 @@ class TranscriptionWorker(QObject):
             try:
                 segments_gen, info = model.transcribe(self.file_path, **transcribe_kwargs)
             except Exception as exc:
-                if transcribe_kwargs.get("vad_filter") and self._is_missing_vad_asset_error(exc):
+                if self._is_cuda_runtime_error(exc):
                     logging.warning(
-                        "Silero VAD asset missing in packaged app; retrying transcription with no_vad profile."
+                        "CUDA runtime error during transcription (%s); "
+                        "reloading model on CPU and retrying.",
+                        exc,
+                    )
+                    unload_model()
+                    model = get_model()
+                    segments_gen, info = model.transcribe(self.file_path, **transcribe_kwargs)
+                elif transcribe_kwargs.get("vad_filter") and self._is_vad_unavailable_error(exc):
+                    logging.warning(
+                        "VAD unavailable (%s); retrying transcription with no_vad profile.",
+                        exc,
                     )
                     active_profile = "no_vad"
                     transcribe_kwargs = self._build_transcribe_kwargs(active_profile)

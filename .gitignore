@@ -8,6 +8,7 @@ venv/
 .venv/
 env/
 .env/
+.hf_token
 
 # Build and Dist
 build/
@@ -18,6 +19,7 @@ dist/
 # Storage Directories
 models/
 transcripts/
+cuda/
 setup_state.json
 
 # IDE / Editor
@@ -27,3 +29,8 @@ setup_state.json
 # Logs and Errors
 err.txt
 *.log
+
+# Test / scratch files
+test.py
+test2.py
+test_hfd/

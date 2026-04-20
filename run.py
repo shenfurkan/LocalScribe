@@ -19,6 +19,7 @@ Python interpreter (``sys.executable``).
 """
 import subprocess
 import sys
+import os
 from pathlib import Path
 
 
@@ -27,7 +28,6 @@ REQUIRED_MODULES = [
     "faster_whisper",
     "docx",
     "fpdf",
-    "argostranslate",
     "huggingface_hub",
 ]
 

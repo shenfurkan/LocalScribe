@@ -34,15 +34,28 @@ from pathlib import Path
 from faster_whisper import WhisperModel
 from core.paths import models_dir
 from core.gpu_manager import detect_gpu, ensure_cuda_env, optimal_compute_type, optimal_cpu_threads
+from core.setup_manager import (
+    get_active_model_id,
+    get_default_model_id,
+    get_model_entry,
+)
 
 # ── Module-level state ──────────────────────────────────────────────────────────
 _model: WhisperModel | None = None       # cached singleton; set once
 _model_lock = threading.Lock()            # serialises first-load attempts
 _model_error: str | None = None           # last error message (for UI)
+logger = logging.getLogger(__name__)
 
-# Minimum acceptable size (bytes) for the model binary.
-# The real model.bin is ~3 GB; 1 GB rejects partial / interrupted downloads.
+# Fallback minimum acceptable size (bytes) for the model binary when the
+# active model's manifest entry does not declare one.
 _MIN_MODEL_BIN_BYTES = 1_000_000_000
+
+
+def _active_model_entry() -> dict:
+    """Return the manifest entry for the currently active (or default) model."""
+    model_id = get_active_model_id() or get_default_model_id()
+    entry = get_model_entry(model_id) or {}
+    return entry
 
 
 
@@ -58,26 +71,60 @@ def _resolve_download_root(download_root: str | None) -> str:
     return str(models_dir())
 
 
-def _local_model_bin_path(root: str) -> Path:
-    """Expected path to the main model binary.
+def _local_model_folder(root: str) -> Path:
+    """Return the folder containing the active model's files.
 
-    The setup manager downloads the Hugging Face repo into a folder
-    called ``large-v3-local`` under the models root.  Inside that
-    folder, ``model.bin`` is the CTranslate2-format model file that
-    faster-whisper loads.
+    Custom/user-imported entries carry an absolute ``abs_path`` and live
+    outside ``models_dir()``. All other entries are stored inside
+    ``models_dir()/<local_dir_name>``.
     """
-    return Path(root) / "large-v3-local" / "model.bin"
+    entry = _active_model_entry()
+    abs_path = entry.get("abs_path")
+    if abs_path:
+        return Path(abs_path)
+    folder = entry.get("local_dir_name", "large-v3-local")
+    return Path(root) / folder
+
+
+def _local_model_bin_path(root: str) -> Path:
+    """Expected path to the active model's binary on disk."""
+    entry = _active_model_entry()
+    filename = entry.get("expected_file", "model.bin")
+    return _local_model_folder(root) / filename
 
 
 def _is_local_model_complete(root: str) -> bool:
-    """Check that model.bin exists and exceeds the minimum size threshold."""
+    """Check that the active model's binary exists and is large enough."""
     model_bin = _local_model_bin_path(root)
     if not model_bin.exists():
         return False
+    entry = _active_model_entry()
+    min_bytes = int(entry.get("min_bin_size_bytes", _MIN_MODEL_BIN_BYTES))
     try:
-        return model_bin.stat().st_size >= _MIN_MODEL_BIN_BYTES
+        return model_bin.stat().st_size >= min_bytes
     except OSError:
         return False
+
+
+def _looks_like_cuda_runtime_error(exc: Exception) -> bool:
+    """Best-effort detection of CUDA/DLL runtime failures.
+
+    Used to decide when we should gracefully retry model initialization on CPU
+    instead of failing hard.
+    """
+    text = str(exc).lower()
+    needles = (
+        "dll",
+        "cublas",
+        "cudnn",
+        "cuda",
+        "ctranslate2",
+        "load library",
+        "could not load",
+        "error 126",
+        "error 127",
+    )
+    return any(n in text for n in needles)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -119,14 +166,17 @@ def get_model(download_root: str | None = None) -> WhisperModel:
     global _model, _model_error
 
     # Configure CUDA DLL paths before anything tries to load them.
+    logger.info("Configuring CUDA environment before model loading...")
     ensure_cuda_env()
+    logger.info("CUDA environment configured successfully.")
 
     if _model is None:
         with _model_lock:
             if _model is None:   # double-checked locking pattern
                 try:
                     root = _resolve_download_root(download_root)
-                    local_model_path = os.path.join(root, "large-v3-local")
+                    entry = _active_model_entry()
+                    local_model_path = str(_local_model_folder(root))
                     os.makedirs(root, exist_ok=True)
 
                     # FAIL-FAST: refuse to proceed if the model binary
@@ -135,7 +185,10 @@ def get_model(download_root: str | None = None) -> WhisperModel:
                     # start a multi-GB download with no UI feedback.
                     if _is_local_model_complete(root):
                         model_path = local_model_path
-                        logging.info("Loading faster-whisper large-v3 from local path: %s", model_path)
+                        logging.info(
+                            "Loading faster-whisper model '%s' from: %s",
+                            entry.get("id", "?"), model_path,
+                        )
                     else:
                         model_bin = _local_model_bin_path(root)
                         raise RuntimeError(
@@ -166,14 +219,34 @@ def get_model(download_root: str | None = None) -> WhisperModel:
                     #   On CPU: match cpu_threads for throughput.
                     num_workers = 1 if run_device == "cuda" else cpu_threads
 
-                    _model = WhisperModel(
-                        model_path,
-                        device=run_device,
-                        compute_type=run_compute,
-                        cpu_threads=cpu_threads,
-                        num_workers=num_workers,
-                        download_root=root,
-                    )
+                    try:
+                        _model = WhisperModel(
+                            model_path,
+                            device=run_device,
+                            compute_type=run_compute,
+                            cpu_threads=cpu_threads,
+                            num_workers=num_workers,
+                            download_root=root,
+                        )
+                    except Exception as exc:
+                        if run_device == "cuda" and _looks_like_cuda_runtime_error(exc):
+                            logger.warning(
+                                "CUDA initialization failed (%s). Falling back to CPU int8.",
+                                exc,
+                            )
+                            run_device = "cpu"
+                            run_compute = "int8"
+                            num_workers = cpu_threads
+                            _model = WhisperModel(
+                                model_path,
+                                device=run_device,
+                                compute_type=run_compute,
+                                cpu_threads=cpu_threads,
+                                num_workers=num_workers,
+                                download_root=root,
+                            )
+                        else:
+                            raise
                     _model_error = None
                     logging.info(
                         "Whisper model loaded successfully on %s (%s).",

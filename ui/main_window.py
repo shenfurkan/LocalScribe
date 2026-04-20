@@ -75,6 +75,7 @@ class MainWindow(QMainWindow):
         self.sidebar.file_selected.connect(self._open_saved_transcript)
         self.sidebar.upload_requested.connect(self._trigger_upload)
         self.sidebar.theme_toggled.connect(self._toggle_theme)
+        self.sidebar.gpu_settings_requested.connect(self._open_gpu_settings)
 
         # ── Live streaming chain ───────────────────────────────────────
         # 1. Transcription starts → switch to transcript page in streaming mode
@@ -249,6 +250,12 @@ class MainWindow(QMainWindow):
             self.anim.setEndValue(target_geom)
             self.anim.setEasingCurve(QEasingCurve.OutCubic)
             self.anim.start()
+
+    def _open_gpu_settings(self):
+        """Open the GPU Acceleration settings dialog."""
+        from ui.dialogs.cuda_setup_dialog import CudaSetupDialog
+        dialog = CudaSetupDialog(self)
+        dialog.exec()
 
     def _trigger_upload(self):
         """Sidebar '+ New Transcription' button."""

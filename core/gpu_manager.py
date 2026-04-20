@@ -165,7 +165,7 @@ def _detect_via_dll_probe() -> Optional[GPUInfo]:
     if os.name != "nt":
         return None
 
-    candidates = ("cublas64_12.dll", "cublas64_11.dll", "nvcuda.dll")
+    candidates = ("cublas64_12.dll", "cublas64_11.dll")
     for dll in candidates:
         try:
             ctypes.WinDLL(dll)
@@ -255,7 +255,16 @@ def ensure_cuda_env() -> None:
             if os.path.isdir(ct2_internal):
                 dll_dirs.append(ct2_internal)
 
-    # ── 3. nvidia pip package layout (fallback) ───────────────────────
+    # ── 3. User-downloaded CUDA libraries ─────────────────────────
+    try:
+        from core.paths import cuda_libs_dir
+        cuda_dir = str(cuda_libs_dir())
+        if os.path.isdir(cuda_dir):
+            dll_dirs.append(cuda_dir)
+    except Exception:
+        pass
+
+    # ── 4. nvidia pip package layout (fallback) ───────────────────────
     nvidia_pkgs = (
         "cublas", "cudnn", "cuda_runtime", "cuda_nvrtc",
         "cufft", "curand", "cusolver", "cusparse",
@@ -297,7 +306,7 @@ def ensure_cuda_env() -> None:
                     _dll_handles.append(handle)
                 except OSError:
                     pass
-        logger.info("CUDA env: registered %d DLL directories.", len(dll_dirs))
+        logger.info("CUDA env: registered %d DLL directories: %s", len(dll_dirs), ", ".join(dll_dirs))
 
     _cuda_env_configured = True
 
@@ -381,6 +390,18 @@ def optimal_compute_type(gpu_info: Optional[GPUInfo] = None) -> tuple[str, str]:
     # Fallback: let CTranslate2 decide
     logger.info("GPU %s → cuda/auto (could not determine optimal type)", gpu_info.device_name)
     return ("cuda", "auto")
+
+
+def reset_cuda_env() -> None:
+    """Reset CUDA environment state so the next call re-detects everything.
+
+    Call this after installing or removing CUDA libraries so that
+    ``detect_gpu()`` and ``ensure_cuda_env()`` pick up the changes.
+    """
+    global _cuda_env_configured, _gpu_info_cache
+    _cuda_env_configured = False
+    _gpu_info_cache = None
+    logger.info("CUDA environment state reset — will re-detect on next call.")
 
 
 def optimal_cpu_threads() -> int:

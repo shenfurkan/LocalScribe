@@ -38,6 +38,7 @@ import argparse
 import compileall
 import subprocess
 import sys
+import re
 from pathlib import Path
 
 
@@ -46,7 +47,6 @@ REQUIRED_IMPORTS = [
     "faster_whisper",
     "docx",
     "fpdf",
-    "argostranslate",
     "huggingface_hub",
     "hf_xet",
 ]
@@ -109,9 +109,28 @@ def _runtime_asset_check() -> None:
     try:
         with open(manifest_path, "r", encoding="utf-8") as f:
             manifest = json.load(f)
-        _ = manifest["whisper_model"]["repo_id"]
-        _ = manifest["whisper_model"]["local_dir_name"]
-        _ = manifest["whisper_model"]["expected_file"]
+        # Support both the new whisper_models list and the legacy
+        # whisper_model single-object schema.
+        entries = manifest.get("whisper_models")
+        if isinstance(entries, list) and entries:
+            for idx, entry in enumerate(entries):
+                for key in ("id", "repo_id", "local_dir_name", "expected_file"):
+                    if not entry.get(key):
+                        raise ValueError(
+                            f"whisper_models[{idx}] is missing required key: {key}"
+                        )
+            default_id = manifest.get("default_model_id")
+            if default_id and not any(e.get("id") == default_id for e in entries):
+                raise ValueError(
+                    f"default_model_id {default_id!r} does not match any model id"
+                )
+        else:
+            legacy = manifest.get("whisper_model")
+            if not isinstance(legacy, dict):
+                raise ValueError("manifest must define whisper_models (list) or whisper_model (object)")
+            for key in ("repo_id", "local_dir_name", "expected_file"):
+                if not legacy.get(key):
+                    raise ValueError(f"whisper_model is missing required key: {key}")
     except Exception as exc:
         print(f"[ERROR] Invalid runtime manifest: {exc}")
         sys.exit(1)
@@ -164,7 +183,26 @@ def run_prebuild_checks() -> None:
     _runtime_asset_check()
 
 
-def build(check_only: bool = False):
+def increment_version():
+    """Auto-increment version number in core/version.py."""
+    version_file = Path("core/version.py")
+    if not version_file.exists():
+        return
+    
+    content = version_file.read_text()
+    match = re.search(r'VERSION\s*=\s*"(\d+)\.(\d+)\.(\d+)"', content)
+    if match:
+        major, minor, patch = map(int, match.groups())
+        patch += 1  # Increment patch version
+        new_version = f'VERSION = "{major}.{minor}.{patch}"'
+        content = re.sub(r'VERSION\s*=\s*"[^"]*"', new_version, content)
+        version_file.write_text(content)
+        print(f"Version incremented to {major}.{minor}.{patch}")
+        return f"{major}.{minor}.{patch}"
+    return None
+
+
+def build(check_only: bool = False, do_increment: bool = True):
     print("Starting LocalScribe PyInstaller Build Framework...")
 
     # 0. Verify all runtime deps are importable before we waste time building.
@@ -173,6 +211,11 @@ def build(check_only: bool = False):
     if check_only:
         print("\nPre-build checks completed successfully. No build was executed (--check-only).")
         return
+    
+    # Auto-increment version for each build (if enabled)
+    new_version = None
+    if do_increment:
+        new_version = increment_version()
 
     # 1. Ensure PyInstaller is available.
     subprocess.run(
@@ -202,12 +245,35 @@ def build(check_only: bool = False):
         "--add-data", f"ui{os.pathsep}ui",
         "--collect-data", "faster_whisper",
         "--collect-data", "ctranslate2",
+        "--collect-data", "hf_xet",
         "--collect-binaries", "ctranslate2",
+        "--collect-binaries", "hf_xet",
         "--exclude-module", "tensorflow",
         "--exclude-module", "tensorboard",
         "--exclude-module", "sympy",
         "--exclude-module", "matplotlib",
         "--exclude-module", "tkinter",
+        # Heavy ML/NLP frameworks pulled in transitively but NEVER imported
+        # by LocalScribe code. Excluding them cuts build time drastically
+        # (torch analysis alone adds ~60s) and strips ~2 GB from the bundle.
+        "--exclude-module", "torch",
+        "--exclude-module", "torchvision",
+        "--exclude-module", "torchaudio",
+        "--exclude-module", "argostranslate",
+        "--exclude-module", "stanza",
+        "--exclude-module", "spacy",
+        "--exclude-module", "thinc",
+        "--exclude-module", "blis",
+        "--exclude-module", "cymem",
+        "--exclude-module", "preshed",
+        "--exclude-module", "srsly",
+        "--exclude-module", "murmurhash",
+        "--exclude-module", "onnxruntime",
+        "--exclude-module", "pandas",
+        "--exclude-module", "scipy",
+        "--exclude-module", "pytest",
+        "--exclude-module", "notebook",
+        "--exclude-module", "IPython",
     ]
 
 
@@ -232,5 +298,25 @@ if __name__ == "__main__":
         action="store_true",
         help="Run all pre-build checks and exit without running PyInstaller.",
     )
+    parser.add_argument(
+        "--no-increment",
+        action="store_true",
+        help="Don't auto-increment version number.",
+    )
+    parser.add_argument(
+        "--version",
+        type=str,
+        help="Override version number (format: 1.0.0).",
+    )
     args = parser.parse_args()
-    build(check_only=args.check_only)
+    
+    if args.version:
+        # Manual version override
+        version_file = Path("core/version.py")
+        if version_file.exists():
+            content = version_file.read_text()
+            content = re.sub(r'VERSION\s*=\s*"[^"]*"', f'VERSION = "{args.version}"', content)
+            version_file.write_text(content)
+            print(f"Version manually set to {args.version}")
+    
+    build(check_only=args.check_only, do_increment=not args.no_increment)

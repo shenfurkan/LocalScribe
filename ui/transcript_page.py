@@ -1,13 +1,13 @@
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QTextBrowser, QFileDialog,
-    QPushButton, QLabel, QProgressBar, QComboBox, QSlider
+    QPushButton, QLabel, QProgressBar, QSlider
 )
-from PySide6.QtCore import Signal, Qt, QUrl
+from PySide6.QtCore import Signal, Qt, QUrl, QProcess
 from PySide6.QtGui import QTextCursor
+import tempfile
 
 from ui.widgets.timestamp_highlighter import TimestampHighlighter
 from ui.dialogs.export_dialog import ExportDialog
-from ui.dialogs.translate_dialog import TranslateDialog
 from ui.dialogs.rename_dialog import RenameDialog
 from core.exporter import export_txt, _readable_time
 from core.storage import StorageManager
@@ -28,6 +28,8 @@ class TranscriptPage(QWidget):
         self._show_timestamps = True
         self._editing = False
         self._streaming = False          # True while live transcription runs
+        self._temp_audio_path: str | None = None  # ffmpeg-extracted temp WAV
+        self._play_until_ms: int | None = None  # auto-pause target (segment-click playback)
 
         main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -83,6 +85,9 @@ class TranscriptPage(QWidget):
         self.player.positionChanged.connect(self._on_player_position_changed)
         self.player.durationChanged.connect(self.audio_slider.setMaximum)
         self.player.playingChanged.connect(self._on_playing_changed)
+        self.player.errorOccurred.connect(self._on_player_error)
+        self._ffmpeg_proc: QProcess | None = None
+        self._pending_source_path: str | None = None  # original path for ffmpeg fallback
 
         audio_layout.addWidget(self.play_btn)
         audio_layout.addWidget(self.audio_slider)
@@ -95,14 +100,8 @@ class TranscriptPage(QWidget):
         header_text_layout.addWidget(self.file_name_label)
         header_text_layout.addWidget(self.meta_label)
 
-        self.version_combo = QComboBox()
-        self.version_combo.setFixedWidth(200)
-        self.version_combo.currentIndexChanged.connect(self._on_version_changed)
-        self.version_combo.hide()
-
         header_layout.addLayout(header_text_layout)
         header_layout.addStretch()
-        header_layout.addWidget(self.version_combo)
 
         editor_layout.addLayout(header_layout)
         editor_layout.addWidget(self.audio_widget)
@@ -166,16 +165,6 @@ class TranscriptPage(QWidget):
         layout.addWidget(self.ts_toggle_btn)
         layout.addWidget(stats_btn)
 
-        # ── TOOLS ─────────────────────────────────────────────────────
-        layout.addWidget(section("TOOLS"))
-
-        translate_btn = QPushButton("\U0001f310  Translate")
-        translate_btn.setObjectName("ActionBtn")
-        translate_btn.clicked.connect(self._open_translate_dialog)
-
-        layout.addWidget(translate_btn)
-
-        # ── FILE ──────────────────────────────────────────────────────
         layout.addWidget(section("FILE"))
 
         self.edit_btn = QPushButton("\u270f\ufe0f  Edit Transcript")
@@ -222,7 +211,6 @@ class TranscriptPage(QWidget):
         self.editor.setReadOnly(True)
         self.edit_btn.setText("\u270f\ufe0f  Edit Transcript")
 
-        self.version_combo.hide()
         self.file_name_label.setText(f"\u23f3  {file_name}")
         self.meta_label.setText("Transcribing \u2014 text will appear here as it is recognised\u2026")
 
@@ -288,45 +276,29 @@ class TranscriptPage(QWidget):
         self.live_progress.hide()
         
         file_path = transcript.get("file_path")
+        self._cleanup_temp_audio()
         if file_path and os.path.exists(file_path):
+            self._pending_source_path = file_path
             self.player.setSource(QUrl.fromLocalFile(file_path))
             self.audio_widget.show()
         else:
+            self._pending_source_path = None
             self.player.setSource(QUrl())
             self.audio_widget.hide()
 
         lang = str(transcript.get("language", "?")).upper()
         dur  = transcript.get("duration_seconds", 0)
-        wc   = transcript.get("word_count", 0)
         mins, secs = int(dur // 60), int(dur % 60)
         conf = transcript.get("language_confidence", 0)
 
         self.file_name_label.setText(transcript.get("name", "Unknown File"))
         self.meta_label.setText(
             f"Language: {lang} ({conf*100:.0f}%)  \u00b7  "
-            f"Duration: {mins}:{secs:02d}  \u00b7  {wc} words  \u00b7  "
+            f"Duration: {mins}:{secs:02d}  \u00b7  {transcript.get('word_count', 0)} words  \u00b7  "
             f"Model: {transcript.get('model', 'large-v3')}"
         )
 
         self._current_segments = transcript.get("segments", [])
-
-        self.version_combo.blockSignals(True)
-        self.version_combo.clear()
-
-        self.version_combo.addItem(f"Original ({lang})", userData={"type": "original"})
-
-        if "translated_versions" in transcript and transcript["translated_versions"]:
-            for lang_code, t_data in transcript["translated_versions"].items():
-                self.version_combo.addItem(
-                    f"Translation ({lang_code.upper()})",
-                    userData={"type": "translation", "code": lang_code, "segments": t_data["segments"]}
-                )
-            self.version_combo.show()
-        else:
-            self.version_combo.hide()
-
-        self.version_combo.blockSignals(False)
-        self.version_combo.setCurrentIndex(0)
 
         self._refresh_text()
 
@@ -334,23 +306,9 @@ class TranscriptPage(QWidget):
     # Internal helpers
     # ─────────────────────────────────────────────────────────────────
 
-    def _on_version_changed(self, idx: int):
-        if idx < 0 or not self._transcript:
-            return
-        data = self.version_combo.itemData(idx)
-        if data["type"] == "original":
-            self._current_segments = self._transcript.get("segments", [])
-        else:
-            self._current_segments = data["segments"]
-        self._refresh_text()
-
     def _get_proxy_transcript(self):
         proxy = dict(self._transcript)
         proxy["segments"] = getattr(self, "_current_segments", self._transcript.get("segments", []))
-        idx = max(0, self.version_combo.currentIndex())
-        if idx > 0:
-            data = self.version_combo.itemData(idx)
-            proxy["name"] = f"{proxy['name']} ({data['code'].upper()})"
         return proxy
 
     def _refresh_text(self):
@@ -369,12 +327,21 @@ class TranscriptPage(QWidget):
             for seg in segs:
                 safetext = html.escape(seg.get('text', ''))
                 if self._show_timestamps and "start" in seg:
+                    # Use first word's start (if available) so clicking skips
+                    # any leading silence gap before the speech begins.
+                    words = seg.get("words") or []
                     try:
-                        start_val = float(seg["start"])
+                        if words:
+                            start_val = float(words[0].get("start", seg["start"]))
+                            end_val = float(words[-1].get("end", seg.get("end", start_val)))
+                        else:
+                            start_val = float(seg["start"])
+                            end_val = float(seg.get("end", start_val))
                     except (ValueError, TypeError):
                         start_val = 0.0
+                        end_val = 0.0
                     ts_str = _readable_time(start_val)
-                    link = f'<a href="ts:{start_val}">{ts_str}</a>'
+                    link = f'<a href="ts:{start_val}:{end_val}">{ts_str}</a>'
                     html_parts.append(f"{link}  {safetext}")
                 else:
                     html_parts.append(safetext)
@@ -392,14 +359,10 @@ class TranscriptPage(QWidget):
         if self._streaming:
             return  # cannot edit while streaming
 
-        idx = max(0, self.version_combo.currentIndex())
-        data = self.version_combo.itemData(idx) if self.version_combo.count() > 0 else {"type": "original"}
-
         self._editing = not self._editing
         self.editor.setReadOnly(not self._editing)
         if self._editing:
             self.edit_btn.setText("\U0001f4be  Save Changes")
-            self.version_combo.setEnabled(False)
             self._refresh_text()
         else:
             # Persist the edited text as a single segment
@@ -411,19 +374,11 @@ class TranscriptPage(QWidget):
                 "words": [],
             }]
 
-            if data["type"] == "original":
-                self._transcript["segments"] = new_segments
-                self.storage.save(self._transcript)
-            else:
-                code = data["code"]
-                self.storage.save_translation(self._transcript["id"], code, new_segments)
-                self._transcript["translated_versions"][code]["segments"] = new_segments
-                data["segments"] = new_segments
-                self.version_combo.setItemData(idx, data)
+            self._transcript["segments"] = new_segments
+            self.storage.save(self._transcript)
 
             self._current_segments = new_segments
             self.edit_btn.setText("\u270f\ufe0f  Edit Transcript")
-            self.version_combo.setEnabled(True)
             self._refresh_text()
 
     # ─────────────────────────────────────────────────────────────────
@@ -433,22 +388,92 @@ class TranscriptPage(QWidget):
     def _seek_to_anchor(self, url: QUrl):
         if url.scheme() == "ts" and self.player.source().isValid():
             try:
-                seconds = float(url.path())
+                # Encoded as "ts:<start>" or "ts:<start>:<end>".
+                raw = url.toString()
+                parts = raw.split(":")
+                seconds = float(parts[1])
+                end_seconds = float(parts[2]) if len(parts) >= 3 else None
                 self.player.setPosition(int(seconds * 1000))
+                # When an end bound is present, auto-pause at that point so
+                # clicking a timestamp plays only that segment.
+                self._play_until_ms = int(end_seconds * 1000) if end_seconds else None
                 self.player.play()
-            except ValueError:
+            except (ValueError, IndexError):
                 pass
 
     def _toggle_playback(self):
         if self.player.isPlaying():
             self.player.pause()
         else:
+            if self.player.mediaStatus() == QMediaPlayer.NoMedia:
+                return
+            # Play-All: clear any single-segment auto-pause target.
+            self._play_until_ms = None
             self.player.play()
             
+    def _on_player_error(self, error, error_string: str):
+        import logging
+        logging.warning("QMediaPlayer error %s: %s", error, error_string)
+        # FormatError means Windows Media Foundation can't decode the file.
+        # Try to extract audio to a temp WAV via ffmpeg and reload.
+        from PySide6.QtMultimedia import QMediaPlayer as _QMP
+        if error == _QMP.Error.FormatError and self._pending_source_path:
+            self._extract_audio_with_ffmpeg(self._pending_source_path)
+
+    def _extract_audio_with_ffmpeg(self, source_path: str):
+        import logging
+        import shutil
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            logging.warning("ffmpeg not found on PATH — cannot decode this audio format.")
+            return
+
+        self._cleanup_temp_audio()
+        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        tmp.close()
+        self._temp_audio_path = tmp.name
+
+        self._ffmpeg_proc = QProcess(self)
+        self._ffmpeg_proc.finished.connect(self._on_ffmpeg_finished)
+        self._ffmpeg_proc.start(
+            ffmpeg,
+            ["-y", "-i", source_path, "-vn",
+             "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2",
+             self._temp_audio_path],
+        )
+        logging.info("ffmpeg extracting audio from %s → %s", source_path, self._temp_audio_path)
+
+    def _on_ffmpeg_finished(self, exit_code: int, _exit_status):
+        import logging
+        if exit_code == 0 and self._temp_audio_path and os.path.exists(self._temp_audio_path):
+            logging.info("ffmpeg extraction done — reloading player with WAV.")
+            self._pending_source_path = None  # clear BEFORE setSource so error handler won't re-trigger
+            self.player.setSource(QUrl.fromLocalFile(self._temp_audio_path))
+            self.player.play()
+        else:
+            logging.warning("ffmpeg extraction failed (exit %s).", exit_code)
+
+    def _cleanup_temp_audio(self):
+        if self._temp_audio_path and os.path.exists(self._temp_audio_path):
+            try:
+                os.unlink(self._temp_audio_path)
+            except OSError:
+                pass
+        self._temp_audio_path = None
+
+    def closeEvent(self, event):
+        self._cleanup_temp_audio()
+        super().closeEvent(event)
+
     def _on_playing_changed(self, is_playing: bool):
         self.play_btn.setText("⏸ Pause" if is_playing else "▶ Play")
 
     def _on_player_position_changed(self, position: int):
+        # Auto-pause when a single-segment playback reaches its end.
+        if self._play_until_ms is not None and position >= self._play_until_ms:
+            self._play_until_ms = None
+            self.player.pause()
+
         if not self.audio_slider.isSliderDown():
             self.audio_slider.setValue(position)
             
@@ -475,12 +500,7 @@ class TranscriptPage(QWidget):
             return
         ExportDialog(self._get_proxy_transcript(), parent=self).exec()
 
-    def _open_translate_dialog(self):
-        if not self._transcript or self._streaming:
-            return
-        dlg = TranslateDialog(self._transcript, self.storage, parent=self)
-        dlg.translation_saved.connect(self.load)
-        dlg.exec()
+
 
 
     def _show_stats(self):
@@ -524,6 +544,14 @@ class TranscriptPage(QWidget):
             QMessageBox.Yes | QMessageBox.No,
         )
         if reply == QMessageBox.Yes:
+            # Stop playback and release the file handle BEFORE deleting.
+            self.player.stop()
+            self.player.setSource(QUrl())
+            self._play_until_ms = None
+            self._pending_source_path = None
+            self._cleanup_temp_audio()
+            self.audio_widget.hide()
+
             tid = self._transcript["id"]
             self.storage.delete(tid)
             self.transcript_deleted.emit(tid)

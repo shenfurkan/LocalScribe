@@ -16,14 +16,10 @@ No internet connection required. No subscriptions. No tracking. Complete privacy
 * **Instant Background Initialization**: Core transcription models are intelligently preloaded by a background worker instantly upon opening the application, making startup smooth and non-blocking. 
 * **Live Streaming Transcripts**: Don't just stare at a progress bar. LocalScribe features a real-time live view of your transcription as it streams word-by-word into the UI, updating on the fly!
 
-### Native Offline Translation
-* **ArgosTranslate Integration**: Integrated local-only machine translation engine bridging dozens of language pairs.  
-* **Translation Manager**: Translations work seamlessly—translate entire lengthy transcripts asynchronously. All language models are stored locally ensuring privacy.
-
-### Rich Document Generation & Export
 * **SRT Subtitles Generation**: Generate standardized `.srt` subtitle files. Granularly customize subtitle breaks, max line lengths, and max sentences perfectly customized for YouTube videos or social media.
 * **Microsoft Word Export**: Advanced `python-docx` integration correctly outputs deeply formatted transcripts including automatic conversational breakdown blocks. 
 * **Direct PDF Generation**: Features `fpdf2` logic for directly rendering transcripts into standardized portable documents.
+
 
 ### Beautiful, Modern UI Elements
 * **Native GUI**: Developed with PySide6 for snappy, native cross-platform performance.
@@ -51,7 +47,6 @@ LocalScribe/
 ├── core/
 │   ├── paths.py             # Centralized data directory resolution (dev vs frozen)
 │   ├── transcriber.py       # Interfaces with faster-whisper and hardware bridging
-│   ├── translator.py        # Logic pipeline for argostranslate text transformation
 │   ├── exporter.py          # PDF/Word processing and string handling
 │   ├── model_manager.py     # Checks/Downloads required translation & transcript models
 │   └── storage.py           # Handles state mapping, JSON history, config caching
@@ -233,7 +228,6 @@ LocalScribe is built on top of excellent open-source projects. Huge thanks to th
 - [CTranslate2](https://github.com/OpenNMT/CTranslate2) — high-performance inference runtime used under `faster-whisper`.
 - [Hugging Face Hub](https://huggingface.co/docs/huggingface_hub/) — model hosting and download SDK used during first-run setup.
 - [Systran/faster-whisper-large-v3](https://huggingface.co/Systran/faster-whisper-large-v3) — Whisper model repository downloaded for local inference.
-- [Argos Translate](https://github.com/argosopentech/argos-translate) — offline translation engine integration.
 - [PySide6 / Qt for Python](https://doc.qt.io/qtforpython/) — desktop UI framework.
 - [python-docx](https://github.com/python-openxml/python-docx) and [fpdf2](https://github.com/py-pdf/fpdf2) — document export support.
 - [FFmpeg](https://ffmpeg.org/) — audio decoding backend used before transcription.

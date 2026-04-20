@@ -104,6 +104,17 @@ def transcripts_dir() -> Path:
     return d
 
 
+def cuda_libs_dir() -> Path:
+    """Directory where user-downloaded CUDA DLLs (cuBLAS, cuDNN) are stored.
+
+    Kept under the per-user data root so it survives app updates and
+    does not require elevated permissions.
+    """
+    d = data_root() / "cuda"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def app_bundle_dir() -> Path:
     """Directory containing bundled static assets (icons, QSS themes).
 

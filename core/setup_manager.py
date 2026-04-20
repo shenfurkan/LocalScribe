@@ -23,6 +23,7 @@ repo to download, the expected subdirectory name, and the filename
 that must exist for the model to be considered “ready”.
 """
 
+import importlib
 import json
 import logging
 import os
@@ -39,7 +40,7 @@ from PySide6.QtCore import QObject, Signal
 from huggingface_hub import HfApi, hf_hub_download
 import huggingface_hub.utils as hf_utils
 
-from core.paths import models_dir, data_root
+from core.paths import models_dir, data_root, app_bundle_dir
 
 _worker_ctx = threading.local()
 
@@ -59,7 +60,7 @@ _MANIFEST_PATH = Path(__file__).parent / "runtime_manifest.json"
 _SETUP_STATE_FILE = "setup_state.json"
 
 # Minimum file size (bytes) for model.bin to be considered complete.
-# The real file is ~3 GB; 1 GB catches partial / interrupted downloads.
+# Used as a fallback if the manifest entry does not specify one.
 _MIN_MODEL_BIN_BYTES = 1_000_000_000
 
 # Hugging Face Hub timeout/retry tuning for slow or unstable connections.
@@ -70,11 +71,110 @@ _DOWNLOAD_RETRY_BACKOFF_SECONDS = 3.0
 # Prevents the app from hanging for minutes on heavily throttled connections.
 _MAX_RATE_LIMIT_WAIT = 90
 
+# Optional Hugging Face token sources (checked in order).
+_HF_TOKEN_ENV_KEYS = (
+    "HF_TOKEN",
+    "HUGGING_FACE_HUB_TOKEN",
+    "HUGGINGFACE_TOKEN",
+)
+
+
+def _read_token_file(path: Path) -> str | None:
+    """Read and sanitize a Hugging Face token file.
+
+    Returns ``None`` if the file is missing, unreadable, or empty.
+    """
+    try:
+        if not path.exists() or not path.is_file():
+            return None
+        token = path.read_text(encoding="utf-8").strip()
+        return token or None
+    except Exception:
+        return None
+
+
+def _resolve_hf_token() -> str | None:
+    """Resolve Hugging Face token from env or local token files.
+
+    Resolution order:
+    1. Environment variables (preferred in CI/runtime setups)
+    2. ``.hf_token`` under writable data root
+    3. ``.hf_token`` next to app bundle/project root
+
+    Never logs token values.
+    """
+    for key in _HF_TOKEN_ENV_KEYS:
+        value = os.environ.get(key, "").strip()
+        if value:
+            return value
+
+    token_files = [
+        data_root() / ".hf_token",
+        app_bundle_dir() / ".hf_token",
+        Path(__file__).resolve().parent.parent / ".hf_token",
+    ]
+    for token_path in dict.fromkeys(token_files):
+        token = _read_token_file(token_path)
+        if token:
+            return token
+    return None
+
 
 def _load_manifest() -> dict:
     """Load the JSON manifest that declares which models to download."""
     with open(_MANIFEST_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def list_available_models() -> list[dict]:
+    """Return the list of models declared in the manifest plus any
+    user-registered custom models.
+
+    Custom models are local-folder entries added via
+    :func:`register_custom_model` and stored in ``setup_state.json``.
+    """
+    manifest = _load_manifest()
+    models = manifest.get("whisper_models")
+    if isinstance(models, list) and models:
+        base = list(models)
+    else:
+        single = manifest.get("whisper_model")
+        if isinstance(single, dict):
+            base = [{
+                **single,
+                "id": single.get("id", "legacy"),
+                "display_name": single.get("display_name", "Whisper"),
+            }]
+        else:
+            base = []
+
+    # Append custom entries persisted in setup state.
+    custom = load_setup_state().get("custom_models")
+    if isinstance(custom, list):
+        base.extend(c for c in custom if isinstance(c, dict) and c.get("id"))
+    return base
+
+
+def get_default_model_id() -> str:
+    """Return the manifest-declared default model id."""
+    manifest = _load_manifest()
+    default = manifest.get("default_model_id")
+    if default:
+        return str(default)
+    models = list_available_models()
+    return models[0]["id"] if models else ""
+
+
+def get_model_entry(model_id: str) -> dict | None:
+    """Return the manifest entry for *model_id* or None."""
+    for m in list_available_models():
+        if m.get("id") == model_id:
+            return m
+    return None
+
+
+def _model_min_bytes(entry: dict) -> int:
+    return int(entry.get("min_bin_size_bytes", _MIN_MODEL_BIN_BYTES))
 
 
 def _setup_state_path() -> Path:
@@ -114,29 +214,285 @@ def save_setup_state(state: dict) -> None:
         shutil.move(tmp, p)
 
 
-def is_model_ready() -> bool:
-    """Return True only when the Whisper model binary is present *and* plausibly complete.
+def model_folder_for_entry(entry: dict) -> Path:
+    """Return the on-disk folder containing the model files for *entry*.
 
-    Checks performed:
-    1. The expected file (``model.bin``) exists on disk under
-       ``models_dir() / <local_dir_name>``.
-    2. Its size is at least ``_MIN_MODEL_BIN_BYTES`` (1 GB) to reject
-       partial downloads or empty placeholder files.
-
-    This function is called from three places:
-    * ``main.py`` — first-run gate (decides whether to show SetupDialog).
-    * ``dashboard_page.py`` — pre-flight check before starting transcription.
-    * ``SetupWorker._do_setup()`` — skip download if model already exists.
+    Custom (user-imported) entries carry an absolute ``abs_path``; all
+    other entries live under ``models_dir()/<local_dir_name>``.
     """
-    manifest = _load_manifest()
-    info = manifest["whisper_model"]
-    model_path = models_dir() / info["local_dir_name"] / info["expected_file"]
+    abs_path = entry.get("abs_path")
+    if abs_path:
+        return Path(abs_path)
+    return models_dir() / entry["local_dir_name"]
+
+
+def is_model_ready(model_id: str | None = None) -> bool:
+    """Return True only when the target Whisper model is present *and* plausibly complete.
+
+    If *model_id* is None, the currently active model (or the manifest
+    default) is used. Readiness requires the expected binary to exist on
+    disk and exceed the per-model minimum size threshold.
+    """
+    if not model_id:
+        model_id = get_active_model_id() or get_default_model_id()
+    entry = get_model_entry(model_id)
+    if not entry:
+        return False
+    model_path = model_folder_for_entry(entry) / entry.get("expected_file", "model.bin")
     if not model_path.exists():
         return False
     try:
-        return model_path.stat().st_size >= _MIN_MODEL_BIN_BYTES
+        return model_path.stat().st_size >= _model_min_bytes(entry)
     except OSError:
         return False
+
+
+def find_ready_model_id() -> str | None:
+    """Return the first model id that is currently ready on disk.
+
+    Preference order:
+    1) active model id (if ready)
+    2) manifest default model id (if ready)
+    3) first ready model from the manifest list
+    """
+    active = get_active_model_id()
+    if active and is_model_ready(active):
+        return active
+
+    default = get_default_model_id()
+    if default and is_model_ready(default):
+        return default
+
+    for entry in list_available_models():
+        mid = entry.get("id")
+        if mid and is_model_ready(mid):
+            return str(mid)
+    return None
+
+
+def _legacy_model_roots() -> list[Path]:
+    """Return candidate model roots from older/local development layouts."""
+    roots: list[Path] = []
+
+    # Dev repo layout (running from source): <project>/models
+    roots.append(Path(__file__).resolve().parent.parent / "models")
+
+    # Current working directory layout: <cwd>/models
+    roots.append(Path.cwd() / "models")
+
+    # When launched from dist/LocalScribe/LocalScribe.exe inside the repo,
+    # the source project root is typically two levels up from the exe dir.
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        roots.append(exe_dir.parent.parent / "models")
+
+    # Keep order, remove duplicates.
+    return [Path(p) for p in dict.fromkeys(roots)]
+
+
+def adopt_legacy_model_if_needed(model_id: str | None = None) -> bool:
+    """Try to reuse an already-downloaded model from legacy/local folders.
+
+    Returns ``True`` when the target model is ready after this call (either it
+    was already present in ``models_dir()`` or copied there successfully).
+    """
+    if not model_id:
+        model_id = get_active_model_id() or get_default_model_id()
+    entry = get_model_entry(model_id)
+    if not entry:
+        return False
+
+    if is_model_ready(model_id):
+        return True
+
+    target_root = models_dir()
+    target_dir = target_root / entry["local_dir_name"]
+    target_file = target_dir / entry["expected_file"]
+
+    min_bytes = _model_min_bytes(entry)
+
+    for legacy_root in _legacy_model_roots():
+        src_dir = legacy_root / entry["local_dir_name"]
+        src_file = src_dir / entry["expected_file"]
+
+        if not src_file.exists():
+            continue
+        try:
+            if src_file.stat().st_size < min_bytes:
+                continue
+        except OSError:
+            continue
+
+        try:
+            if src_dir.resolve() == target_dir.resolve():
+                continue
+        except Exception:
+            pass
+
+        logging.info("Found existing model in legacy path: %s", src_dir)
+        target_root.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(src_dir, target_dir, dirs_exist_ok=True)
+        logging.info("Copied model to runtime path: %s", target_dir)
+
+        try:
+            if target_file.exists() and target_file.stat().st_size >= min_bytes:
+                return True
+        except OSError:
+            pass
+
+    return is_model_ready(model_id)
+
+
+def get_active_model_id() -> str | None:
+    """Return the model id selected by the user during setup, or None."""
+    value = load_setup_state().get("active_model_id")
+    return str(value) if value else None
+
+
+def set_active_model_id(model_id: str) -> None:
+    """Persist the active model id and refresh the readiness marker."""
+    entry = get_model_entry(model_id)
+    if not entry:
+        raise ValueError(f"Unknown model id: {model_id!r}")
+    state = load_setup_state()
+    state["active_model_id"] = model_id
+    state["model_path"] = str(model_folder_for_entry(entry))
+    state["model_ready"] = is_model_ready(model_id)
+    save_setup_state(state)
+
+
+def register_custom_model(folder: str | Path, display_name: str | None = None) -> dict:
+    """Register a user-supplied local model folder as a selectable model.
+
+    The *folder* must contain a CTranslate2-format Whisper model: at minimum a
+    ``model.bin`` file plus ``config.json``. Tokenizer and vocabulary files are
+    optional but recommended.
+
+    Returns the stored entry (with a generated ``id``) on success.
+    Raises ``ValueError`` if the folder is not a valid Whisper model.
+    """
+    folder_path = Path(folder).expanduser().resolve()
+    if not folder_path.is_dir():
+        raise ValueError(f"Not a folder: {folder_path}")
+
+    model_bin = folder_path / "model.bin"
+    config = folder_path / "config.json"
+    if not model_bin.exists():
+        raise ValueError(
+            f"Missing 'model.bin' in {folder_path}. "
+            "Select a CTranslate2-format Whisper model folder."
+        )
+    if not config.exists():
+        raise ValueError(
+            f"Missing 'config.json' in {folder_path}. "
+            "The folder does not look like a Whisper model."
+        )
+    try:
+        bin_size = model_bin.stat().st_size
+    except OSError as exc:
+        raise ValueError(f"Cannot read model.bin: {exc}") from exc
+    try:
+        with open(config, "r", encoding="utf-8") as f:
+            config_data = json.load(f)
+    except Exception as exc:
+        raise ValueError(f"Cannot read/parse config.json: {exc}") from exc
+    if not isinstance(config_data, dict):
+        raise ValueError("config.json is invalid (expected a JSON object).")
+    if bin_size < 10_000_000:  # < 10 MB is certainly not a whisper model
+        raise ValueError(
+            f"'model.bin' is too small ({bin_size} bytes) to be a Whisper model."
+        )
+
+    model_id = f"custom:{folder_path.name}"
+    # Disambiguate if the user picks two folders with the same leaf name.
+    state = load_setup_state()
+    custom_models: list[dict] = list(state.get("custom_models") or [])
+    existing_ids = {c.get("id") for c in custom_models} | {
+        m.get("id") for m in list_available_models() if m.get("id")
+    }
+    if model_id in existing_ids:
+        suffix = 2
+        while f"{model_id}#{suffix}" in existing_ids:
+            suffix += 1
+        model_id = f"{model_id}#{suffix}"
+
+    entry = {
+        "id": model_id,
+        "display_name": display_name or f"Local · {folder_path.name}",
+        "tier": "Local folder",
+        "description": f"Imported from {folder_path}",
+        "approx_size_mb": max(1, bin_size // (1024 * 1024)),
+        "min_bin_size_bytes": max(1, bin_size),
+        "local_dir_name": folder_path.name,
+        "expected_file": "model.bin",
+        "abs_path": str(folder_path),
+        "custom": True,
+        "repo_id": "",
+    }
+
+    # Replace any stale entry with the same abs_path (re-imported folder).
+    custom_models = [c for c in custom_models if c.get("abs_path") != entry["abs_path"]]
+    custom_models.append(entry)
+    state["custom_models"] = custom_models
+    save_setup_state(state)
+    return entry
+
+
+# ── Hugging Face token storage ────────────────────────────────────────
+
+def hf_token_path() -> Path:
+    """Return the on-disk location of the saved Hugging Face token."""
+    return data_root() / ".hf_token"
+
+
+def save_hf_token(token: str) -> None:
+    """Persist *token* securely under data_root().
+
+    Performs an atomic write and best-effort 0600 permissions on POSIX.
+    Never logs the token value.
+    """
+    token = (token or "").strip()
+    if not token:
+        raise ValueError("Refusing to save empty Hugging Face token.")
+    path = hf_token_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(token)
+    os.replace(tmp, path)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def clear_hf_token() -> None:
+    """Remove any saved Hugging Face token. Safe if missing."""
+    try:
+        hf_token_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def validate_hf_token(token: str) -> tuple[bool, str]:
+    """Validate *token* by hitting the Hugging Face whoami endpoint.
+
+    Returns (True, username) on success, or (False, error_message) on
+    failure. The token value itself is never logged.
+    """
+    token = (token or "").strip()
+    if not token:
+        return False, "Token is empty."
+    try:
+        api = HfApi(token=token)
+        info = api.whoami()
+        name = (
+            (isinstance(info, dict) and (info.get("name") or info.get("fullname")))
+            or "authenticated user"
+        )
+        return True, str(name)
+    except Exception as exc:
+        return False, str(exc)
 
 
 def _format_bytes(num_bytes: float) -> str:
@@ -155,6 +511,20 @@ def _format_speed(bytes_per_sec: float) -> str:
     return f"{_format_bytes(bytes_per_sec)}/s"
 
 
+def _format_eta(seconds: float) -> str:
+    """Format a remaining-time estimate into a short human-readable string."""
+    if seconds is None or seconds < 0:
+        return "—"
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    m, s = divmod(seconds, 60)
+    if m < 60:
+        return f"{m}m {s:02d}s"
+    h, m = divmod(m, 60)
+    return f"{h}h {m:02d}m"
+
+
 class SetupWorker(QObject):
     """
     Performs first-run setup in a background thread.
@@ -170,14 +540,22 @@ class SetupWorker(QObject):
     log_update = Signal(str)
     progress = Signal(int)
     file_status = Signal(str)
+    speed_update = Signal(str, str)  # (speed_text, eta_text)
     finished = Signal(bool, str)
 
-    def __init__(self):
+    def __init__(self, model_id: str | None = None, hf_token: str | None = None):
         super().__init__()
         self._cancel_requested = False
         self._global_bytes_total = 0
         self._global_bytes_done = 0
         self._current_file_done = 0
+        self.model_id = model_id or get_default_model_id()
+        self._explicit_token = (hf_token or "").strip() or None
+        # Speed/ETA tracking state
+        self._speed_last_time: float | None = None
+        self._speed_last_bytes: int = 0
+        self._speed_ema: float = 0.0
+        self._last_speed_emit: float = 0.0
 
     def chunk_downloaded(self, n_bytes: int):
         self._current_file_done = n_bytes
@@ -185,6 +563,32 @@ class SetupWorker(QObject):
         if self._global_bytes_total > 0:
             pct = int((current_total / self._global_bytes_total) * 100)
             self.progress.emit(min(99, pct))
+        self._update_speed(current_total)
+
+    def _update_speed(self, current_total: int) -> None:
+        """Compute EMA-smoothed download speed and ETA, emit every ~400ms."""
+        now = time.monotonic()
+        if self._speed_last_time is None:
+            self._speed_last_time = now
+            self._speed_last_bytes = current_total
+            return
+        dt = now - self._speed_last_time
+        if dt < 0.5:
+            return
+        db = max(0, current_total - self._speed_last_bytes)
+        instant = (db / dt) if dt > 0 else 0.0
+        if self._speed_ema <= 0:
+            self._speed_ema = instant
+        else:
+            self._speed_ema = 0.3 * instant + 0.7 * self._speed_ema
+        self._speed_last_time = now
+        self._speed_last_bytes = current_total
+        if now - self._last_speed_emit < 0.4:
+            return
+        remaining = max(0, self._global_bytes_total - current_total)
+        eta_seconds = int(remaining / self._speed_ema) if self._speed_ema > 1 else -1
+        self.speed_update.emit(_format_speed(self._speed_ema), _format_eta(eta_seconds))
+        self._last_speed_emit = now
 
     def _log(self, text: str) -> None:
         """Log a message to the console and emit a signal."""
@@ -259,6 +663,7 @@ class SetupWorker(QObject):
         filename: str,
         revision: str,
         local_dir: Path,
+        token: str | None,
     ) -> str:
         """Download a single repo file with 429-aware and timeout-aware retries.
 
@@ -287,6 +692,7 @@ class SetupWorker(QObject):
                     filename=filename,
                     revision=revision,
                     local_dir=str(local_dir),
+                    token=token,
                 )
             except Exception as exc:
                 last_exc = exc
@@ -323,32 +729,22 @@ class SetupWorker(QObject):
 
         raise RuntimeError(str(last_exc) if last_exc else "Download failed after retries.")
 
-    def _download_repo_with_progress(self, repo_id: str, local_dir: Path) -> None:
+    def _download_repo_with_progress(self, repo_id: str, local_dir: Path, token: str | None) -> None:
         """Download every file in a Hugging Face model repo with live progress.
 
         Progress tracking
         -----------------
-        ``hf_xet`` (the accelerated backend) bypasses tqdm entirely — it
-        downloads chunks into its own content-addressed cache and only hands
-        the assembled file to the HF layer when the transfer is complete.
-        A ``tqdm_class`` hook therefore receives at most one large
-        ``update(n)`` call per file, making the bar appear frozen then jump.
+        We monkey-patch ``huggingface_hub.file_download.tqdm`` with a custom
+        subclass (``_ProgressTqdm``) that intercepts every ``update(n)`` call.
+        Each call carries the cumulative byte count for the current file.
+        Combined with the known per-file sizes from the repo manifest, this
+        gives a smooth, accurate overall percentage that increments naturally
+        as bytes arrive over the network.
 
-        Instead, a lightweight daemon thread polls the directories where the
-        active download backend writes its data — ``local_dir``, the HF hub
-        model cache, and the xet chunk cache — every 0.75 s.  The aggregate
-        byte count minus the pre-download baseline gives a smooth, real-time
-        progress value that works regardless of which backend is in use.
-
-        Parameters
-        ----------
-        repo_id : str
-            Hugging Face repo identifier, e.g. ``Systran/faster-whisper-large-v3``.
-        local_dir : Path
-            Target directory.  ``hf_hub_download(local_dir=...)`` preserves the
-            repo's file structure under this path.
+        hf_xet and hf_transfer are explicitly disabled so that downloads
+        always flow through the standard HTTP tqdm-instrumented path.
         """
-        api = HfApi()
+        api = HfApi(token=token)
         info = api.model_info(repo_id)
         revision = info.sha or "main"  # pin to exact commit for reproducibility
 
@@ -357,8 +753,22 @@ class SetupWorker(QObject):
         os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "120")
         os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "30")
 
-        # Force disabled HF transfer methods to ensure pure chunk streaming with tqdm
-        os.environ["HF_HUB_ENABLE_HF_XET"] = "0"
+        # Enable hf_xet for the Xet CDN when available. If hf_xet is missing
+        # or fails to load (e.g. DLL/runtime issue), gracefully fall back to
+        # standard HTTP downloads instead of failing setup.
+        try:
+            importlib.import_module("hf_xet")
+            os.environ["HF_HUB_ENABLE_HF_XET"] = "1"
+            self._log("hf_xet detected: accelerated HF download path enabled.")
+        except Exception as exc:
+            os.environ["HF_HUB_ENABLE_HF_XET"] = "0"
+            self._log(
+                "hf_xet is unavailable in this runtime; falling back to standard downloads. "
+                f"Details: {exc}"
+            )
+
+        # hf_transfer stays OFF: it is faster but bypasses tqdm so we would
+        # lose the live %, MB/s and ETA in the setup wizard.
         os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
         
         # Monkey patch Hugging Face's tqdm instance in file_download where it is actually used
@@ -388,11 +798,12 @@ class SetupWorker(QObject):
                 filename = sibling.rfilename
                 self.file_status.emit(f"File {idx} of {total_files}: {filename}")
 
-                local_path = self._download_file_with_retry(
+                self._download_file_with_retry(
                     repo_id=repo_id,
                     filename=filename,
                     revision=revision,
                     local_dir=local_dir,
+                    token=token,
                 )
 
                 file_size = getattr(sibling, "size", 0) or 0
@@ -413,14 +824,14 @@ class SetupWorker(QObject):
             self.finished.emit(False, str(exc))
 
     def _do_setup(self):
-        """Orchestrate the full first-run setup.
+        """Orchestrate the full first-run setup for ``self.model_id``.
 
         Steps:
         1. Create data directories (``data_root()``, ``models_dir()``).
-        2. If the model is already downloaded and valid, skip.
+        2. If the selected model is already downloaded and valid, skip.
         3. Otherwise download every file from the Hugging Face repo.
-        4. Validate that ``model.bin`` landed correctly and is >= 1 GB.
-        5. Persist a ``setup_state.json`` marker for future reference.
+        4. Validate that ``model.bin`` landed correctly.
+        5. Persist the active model id so the rest of the app can load it.
         """
         # ── 1. Ensure data directories ────────────────────────────────
         self.status_update.emit("Preparing data directories...")
@@ -428,22 +839,23 @@ class SetupWorker(QObject):
         data_root().mkdir(parents=True, exist_ok=True)
         models_dir()  # creates if needed
 
-        # ── 2. Download whisper model if missing ──────────────────────
-        manifest = _load_manifest()
-        info = manifest["whisper_model"]
-        local_dir = models_dir() / info["local_dir_name"]
-        expected_file = local_dir / info["expected_file"]
+        # ── 2. Resolve selected model and auth token ──────────────────
+        entry = get_model_entry(self.model_id)
+        if not entry:
+            raise RuntimeError(f"Unknown model id: {self.model_id!r}")
+        hf_token = self._explicit_token or _resolve_hf_token()
+        local_dir = models_dir() / entry["local_dir_name"]
+        expected_file = local_dir / entry["expected_file"]
+        self._log(f"Selected model: {entry['display_name']} ({entry['id']})")
         self._log(f"Install location: {local_dir}")
 
-        # is_model_ready() does a robust check: file exists AND >= 1 GB.
-        if is_model_ready():
-            self.status_update.emit("Whisper model already downloaded.")
+        if is_model_ready(self.model_id):
+            self.status_update.emit(f"{entry['display_name']} already downloaded.")
             self._log(f"Model already present: {expected_file}")
             self.progress.emit(100)
         else:
             self.status_update.emit(
-                f"Downloading {info['description']}...\n"
-                "This only happens once. Please keep the app open."
+                f"Downloading {entry['display_name']} (~{entry.get('approx_size_mb', '?')} MB)..."
             )
             self.progress.emit(-1)
 
@@ -453,15 +865,13 @@ class SetupWorker(QObject):
                 "Hugging Face server load, antivirus scanning, and disk write speed."
             )
             try:
-                self._download_repo_with_progress(info["repo_id"], local_dir)
+                self._download_repo_with_progress(entry["repo_id"], local_dir, hf_token)
             except Exception:
                 if self._cancel_requested:
                     self._cleanup_partial_download(local_dir)
                 raise
 
-            # Post-download validation — make sure the binary actually
-            # landed and exceeds our minimum size threshold.
-            if not is_model_ready():
+            if not is_model_ready(self.model_id):
                 raise RuntimeError(
                     "Download completed but model appears incomplete or missing. "
                     f"Expected file: {expected_file}"
@@ -470,13 +880,7 @@ class SetupWorker(QObject):
             self.status_update.emit("Model downloaded successfully.")
             self.progress.emit(100)
 
-        # ── 3. Persist setup completion marker ───────────────────────
-        # This JSON file is informational — the real readiness check
-        # always goes through is_model_ready() which inspects the
-        # actual binary on disk.
-        state = load_setup_state()
-        state["model_ready"] = True
-        state["model_path"] = str(local_dir)
-        save_setup_state(state)
+        # ── 3. Persist active model so the rest of the app uses it ────
+        set_active_model_id(self.model_id)
 
         self.status_update.emit("Setup complete!")
